@@ -207,11 +207,11 @@ if annual_kwh_m2 is not None:
     g = escal/100.0
     # flux d’économies croissantes : S0=eco_$, croissance g, actualisation r
     t = np.arange(1, years+1)
-    savings_nominal = eco_$ * ((1+g)**(t-1))
+    savings_nominal = eco_dollars * ((1+g)**(t-1))
     discount_factors = 1 / ((1+r)**t)
     npv_savings = float(np.sum(savings_nominal * discount_factors))
     npv = npv_savings - capex_net
-    spb = capex_net / eco_$ if eco_$ > 0 else np.inf
+    spb = capex_net / eco_dollars if eco_dollars > 0 else np.inf
 
     f1, f2, f3 = st.columns(3)
     f1.metric("SPB simple (ans)", f"{spb:,.1f}" if np.isfinite(spb) else "∞")
@@ -264,4 +264,5 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul 
+
 
