@@ -31,7 +31,21 @@ with st.sidebar.expander("Hypothèses – Conversion & facteurs"):
 # ==========================
 # SECTION 1 – GÉOMÉTRIE & ORIENTATION
 # ==========================
-st.header("1) Géométrie & orientation")
+# --- Localisation du site (Option A : sans API) ---
+loc1, loc2, loc3 = st.columns([1,1,2])
+with loc1:
+    lat = st.number_input("Latitude", value=46.813900, format="%.6f")
+with loc2:
+    lon = st.number_input("Longitude", value=-71.208000, format="%.6f")
+with loc3:
+    # Lien Google Maps pratique
+    gmap_url = f"https://www.google.com/maps?q={lat},{lon}"
+    st.markdown(f"[Ouvrir dans Google Maps]({gmap_url})")
+# Carte rapide centrée sur le point
+site_df = pd.DataFrame({"lat": [lat], "lon": [lon]})
+st.map(site_df, zoom=12)
+
+# --- Géométrie & orientation de la façade ---
 col1, col2, col3 = st.columns(3)
 with col1:
     area_ft2 = st.number_input("Surface utile du mur solaire (pi²)", min_value=10.0, value=1500.0, step=10.0)
@@ -264,6 +278,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul 
+
 
 
 
