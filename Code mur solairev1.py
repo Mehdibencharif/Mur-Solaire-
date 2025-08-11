@@ -146,12 +146,12 @@ if annual_kwh_m2 is not None:
 
     # L’énergie solaire utile remplace l’énergie finale / le rendement du système remplacé
     kwh_final_evit = q_util_kwh / max(rdt, 1e-6)
-    eco_$ = kwh_final_evit * val_kwh
+    eco_dollars = kwh_final_evit * val_kwh
     ges_tonnes = (kwh_final_evit * ges_factor) / 1000.0
 
     met1, met2, met3 = st.columns(3)
     met1.metric("Énergie finale évitée (kWh/an)", f"{kwh_final_evit:,.0f}")
-    met2.metric("Économies annuelles ($/an)", f"{eco_$:,.0f}")
+    met2.metric("Économies annuelles (dollars/an)", f"{eco_dollars:,.0f}")
     met3.metric("GES évités (t CO₂e/an)", f"{ges_tonnes:,.2f}")
 
 # ==========================
@@ -264,3 +264,4 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul 
+
