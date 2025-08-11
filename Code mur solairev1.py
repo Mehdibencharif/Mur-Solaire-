@@ -245,7 +245,7 @@ if annual_kwh_m2 is not None:
         "Part_saison_%": [frac_saison],
         "Q_utile_kWh_y": [q_util_kwh],
         "Energie_finale_evitee_kWh_y": [kwh_final_evit],
-        "Economies_$_y": [eco_$],
+        "Economies_$_y": [eco_dollars],
         "GES_tCO2e_y": [ges_tonnes],
         "CAPEX_base_$": [capex_base],
         "Marge_$": [marge],
@@ -264,5 +264,6 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul 
+
 
 
