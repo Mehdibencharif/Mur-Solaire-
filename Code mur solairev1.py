@@ -146,12 +146,12 @@ if annual_kwh_m2 is not None:
 
     # L’énergie solaire utile remplace l’énergie finale / le rendement du système remplacé
     kwh_final_evit = q_util_kwh / max(rdt, 1e-6)
-    eco_S = kwh_final_evit * val_kwh
+    eco_$ = kwh_final_evit * val_kwh
     ges_tonnes = (kwh_final_evit * ges_factor) / 1000.0
 
     met1, met2, met3 = st.columns(3)
     met1.metric("Énergie finale évitée (kWh/an)", f"{kwh_final_evit:,.0f}")
-    met2.metric("Économies annuelles ($/an)", f"{eco_S:,.0f}")
+    met2.metric("Économies annuelles ($/an)", f"{eco_$:,.0f}")
     met3.metric("GES évités (t CO₂e/an)", f"{ges_tonnes:,.2f}")
 
 # ==========================
@@ -167,8 +167,7 @@ with colk2:
     marge_pct = st.number_input("Marge (%)", value=20.0, min_value=0.0, max_value=50.0, step=1.0)
 with colk3:
     sub_type = st.selectbox("Type de subvention", ["Aucune", "% du CAPEX", "$ par m² (plafonné)"])
-
-# Calcul coûts
+coûts
 capex_base = area_ft2 * (cout_mat_pi2 + cout_mo_pi2) + autres_fixes
 marge = capex_base * (marge_pct/100.0)
 capex_avant_sub = capex_base + marge
@@ -208,11 +207,11 @@ if annual_kwh_m2 is not None:
     g = escal/100.0
     # flux d’économies croissantes : S0=eco_$, croissance g, actualisation r
     t = np.arange(1, years+1)
-    savings_nominal = eco_S * ((1+g)**(t-1))
+    savings_nominal = eco_$ * ((1+g)**(t-1))
     discount_factors = 1 / ((1+r)**t)
     npv_savings = float(np.sum(savings_nominal * discount_factors))
     npv = npv_savings - capex_net
-    spb = capex_net / eco_S if eco_$ > 0 else np.inf
+    spb = capex_net / eco_$ if eco_$ > 0 else np.inf
 
     f1, f2, f3 = st.columns(3)
     f1.metric("SPB simple (ans)", f"{spb:,.1f}" if np.isfinite(spb) else "∞")
@@ -264,3 +263,4 @@ else:
     st.info("Renseigner l’irradiation pour activer l’export.")
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
+# Calcul 
