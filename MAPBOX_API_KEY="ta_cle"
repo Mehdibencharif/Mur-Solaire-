@@ -1,0 +1,9 @@
+import os
+mapbox_key = os.getenv("MAPBOX_API_KEY")
+st.pydeck_chart(pdk.Deck(
+    map_style="mapbox://styles/mapbox/light-v9",
+    mapbox_key=mapbox_key,
+    initial_view_state=view_state,
+    layers=[site_layer, arrow_layer],
+    tooltip=tooltip
+))
