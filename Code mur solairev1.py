@@ -1,8 +1,10 @@
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from io import BytesIO
+import pydeck as pdk
 from urllib.parse import quote_plus
 
 # ==========================
@@ -13,74 +15,145 @@ st.title("Audit Flash – Mur solaire")
 st.caption("V1.0 – Prototype : estimation simple des gains thermiques, coûts, subventions et rentabilité. Basé sur des entrées clés inspirées de RETScreen.")
 
 # ==========================
-# SECTION 1 – LOCALISATION & ORIENTATION (SIMPLE)
+# SECTION 1 – LOCALISATION & ORIENTATION (ADRESSE + VISUEL)
 # ==========================
-st.header("1) Localisation & orientation (simple)")
+st.header("1) Localisation & orientation")
 
-# Adresse libre (pas de géocodage dans l'app : Google gère la recherche côté web)
+# --- Adresse + liens rapides ---
 adresse = st.text_input(
     "Adresse du site (ou point d’intérêt)",
     value="Saint-Augustin-de-Desmaures, QC",
-    help="Entre une adresse, un code postal ou le nom du site (ex. 'Usine ABC, Rue X, Ville')."
+    help="Ex.: 'Usine ABC, 123 rue X, Ville' ou 'Code postal'."
 )
+q = quote_plus(adresse.strip()) if adresse.strip() else ""
+lien_maps  = f"https://www.google.com/maps/search/?api=1&query={q}" if q else ""
+lien_earth = f"https://earth.google.com/web/search/{q}" if q else ""
 
-# Liens rapides (ouvre dans un nouvel onglet)
-if adresse.strip():
-    q = quote_plus(adresse.strip())
-    lien_maps  = f"https://www.google.com/maps/search/?api=1&query={q}"
-    lien_earth = f"https://earth.google.com/web/search/{q}"
+c1, c2 = st.columns(2)
+with c1:
+    st.markdown(f"🔗 **Google Maps** : [{('Ouvrir dans Maps' if q else '—')}]({lien_maps})" if q else "🔗 **Google Maps** : —")
+with c2:
+    st.markdown(f"🌍 **Google Earth** : [{('Ouvrir dans Earth' if q else '—')}]({lien_earth})" if q else "🌍 **Google Earth** : —")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown(f"🔗 **Google Maps** : [Ouvrir dans Maps]({lien_maps})")
-    with c2:
-        st.markdown(f"🌍 **Google Earth** : [Ouvrir dans Earth]({lien_earth})")
+# --- Géocodage adresse -> lat/lon (avec repli manuel) ---
+def geocode_addr(addr: str):
+    if not addr.strip():
+        return None
+    try:
+        from geopy.geocoders import Nominatim
+        geolocator = Nominatim(user_agent="mur_solaire_app")
+        loc = geolocator.geocode(addr, timeout=10)
+        if loc:
+            return float(loc.latitude), float(loc.longitude)
+    except Exception:
+        pass
+    return None
 
-    st.caption("Astuce : dans Google Maps, utilise l’outil règle/angle pour estimer l’azimut du mur.")
+coords = geocode_addr(adresse) if adresse else None
 
-# Orientation & conditions visuelles (sans surface ici)
+colA, colB = st.columns(2)
+with colA:
+    if coords:
+        lat = st.number_input("Latitude", value=coords[0], format="%.6f")
+    else:
+        lat = st.number_input("Latitude", value=46.813900, format="%.6f")
+with colB:
+    if coords:
+        lon = st.number_input("Longitude", value=coords[1], format="%.6f")
+    else:
+        lon = st.number_input("Longitude", value=-71.208000, format="%.6f")
+
+if not coords and adresse.strip():
+    st.warning("Géocodage indisponible ou infructueux. Coordonnées par défaut affichées — ajuste-les au besoin.")
+
+with st.expander("Comment mesurer/valider l’azimut ?"):
+    st.write(
+        "- L’**azimut** est mesuré **depuis le Nord**, en degrés et **sens horaire**.\n"
+        "- **0°** = Nord, **90°** = Est, **180°** = Sud, **270°** = Ouest.\n"
+        "- ⚠️ La valeur **ne doit jamais être négative** (0–359.99°).\n"
+        "- Astuce : dans Google Maps, utilise l’outil **règle** et compare avec le Nord."
+    )
+
+# --- Orientation & conditions visuelles ---
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     azimuth = st.number_input(
-        "Azimut du mur (°)",
-        value=151.22, min_value=0.0, max_value=359.99, step=0.01,
-        help="Angle mesuré depuis le Nord, en sens horaire. 0=N, 90=E, 180=S, 270=O. ⚠️ Jamais négatif."
+        "Azimut du mur (°)", value=151.22, min_value=0.0, max_value=359.99, step=0.01,
+        help="0–359.99°, depuis le Nord (sens horaire). Exemple: 151° ≈ Sud-Sud-Est."
     )
 with col2:
     tilt = st.number_input(
-        "Inclinaison (°)",
-        value=90.0, min_value=0.0, max_value=90.0, step=1.0,
+        "Inclinaison (°)", value=90.0, min_value=0.0, max_value=90.0, step=1.0,
         help="0° = horizontal (toit), 90° = vertical (façade)."
     )
 with col3:
     shading = st.slider(
-        "Ombrage global (%)",
-        min_value=0, max_value=90, value=10, step=1,
-        help="Estimation des pertes d’irradiation dues aux obstacles proches/lointains."
+        "Ombrage global (%)", min_value=0, max_value=90, value=10, step=1,
+        help="Pertes d’irradiation dues aux obstacles proches/lointains."
     )
 with col4:
     wind_ref = st.number_input(
-        "Vent (m/s – indicatif)",
-        value=3.0, min_value=0.0, step=0.5,
-        help="Valeur indicative pour contexte. Non utilisée dans les calculs MVP."
+        "Vent (m/s – indicatif)", value=3.0, min_value=0.0, step=0.5,
+        help="Valeur indicative pour contexte (non utilisée dans les calculs MVP)."
     )
 
-# Affichage de la direction cardinale (optionnel, utile pour validation)
+# --- Petit utilitaire: azimut -> point cardinal
 def azimut_cardinal(a):
-    # 16 secteurs (N, NNE, NE, ENE, E, ...); centre sur N=0°
     labels = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSO","SO","OSO","O","ONO","NO","NNO"]
     idx = int((a % 360) / 22.5 + 0.5) % 16
     return labels[idx]
 
-st.info(
-    f"📍 **Adresse** : {adresse if adresse.strip() else '—'}  \n"
-    f"🧭 **Azimut** : {azimuth:.2f}° ({azimut_cardinal(azimuth)})  •  "
-    f"📐 **Inclinaison** : {tilt:.0f}°  •  "
-    f"🌫️ **Ombrage** : {shading}%  •  "
-    f"💨 **Vent (indicatif)** : {wind_ref:.1f} m/s  \n\n"
-    "Ce bloc est **visuel** : il sert à positionner le site et à valider l’orientation. "
-    "La surface du capteur est gérée plus loin (performances, coûts)."
+st.caption(
+    f"🧭 **Azimut** : {azimuth:.2f}° ({azimut_cardinal(azimuth)}) • "
+    f"📐 **Inclinaison** : {tilt:.0f}° • "
+    f"🌫️ **Ombrage** : {shading}% • "
+    f"💨 **Vent** : {wind_ref:.1f} m/s"
 )
+
+# --- Carte PyDeck avec flèche d’azimut ---
+def destination_point(lat_deg, lon_deg, bearing_deg, distance_m=200.0):
+    R = 6371000.0
+    br = np.deg2rad(bearing_deg)
+    lat1 = np.deg2rad(lat_deg)
+    lon1 = np.deg2rad(lon_deg)
+    lat2 = np.arcsin(np.sin(lat1)*np.cos(distance_m/R) + np.cos(lat1)*np.sin(distance_m/R)*np.cos(br))
+    lon2 = lon1 + np.arctan2(np.sin(br)*np.sin(distance_m/R)*np.cos(lat1),
+                             np.cos(distance_m/R)-np.sin(lat1)*np.sin(lat2))
+    return np.rad2deg(lat2), np.rad2deg(lon2)
+
+end_lat, end_lon = destination_point(lat, lon, azimuth, 200.0)
+
+point_df = pd.DataFrame([{"lat": lat, "lon": lon}])
+line_df = pd.DataFrame([{"lat": lat, "lon": lon}, {"lat": end_lat, "lon": end_lon}])
+
+site_layer = pdk.Layer(
+    "ScatterplotLayer",
+    data=point_df,
+    get_position='[lon, lat]',
+    get_radius=6,
+    radius_scale=10,
+    pickable=True,
+)
+arrow_layer = pdk.Layer(
+    "PathLayer",
+    data=[{"path": line_df[["lon","lat"]].values.tolist()}],
+    get_width=4,
+    width_min_pixels=2,
+    pickable=False,
+)
+
+view_state = pdk.ViewState(
+    longitude=lon, latitude=lat, zoom=15, pitch=45, bearing=float(azimuth)
+)
+
+mapbox_key = os.getenv("MAPBOX_API_KEY", None)  # optionnel
+st.pydeck_chart(pdk.Deck(
+    map_style="mapbox://styles/mapbox/light-v9",
+    mapbox_key=mapbox_key,
+    initial_view_state=view_state,
+    layers=[site_layer, arrow_layer],
+    tooltip={"html": "<b>Site</b><br/>Lat: {lat}<br/>Lon: {lon}", "style": {"color": "white"}}
+))
 
 # ==========================
 # SECTION 2 – CLIMAT & ENERGIE SOLAIRE INCIDENTE
@@ -328,6 +401,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
