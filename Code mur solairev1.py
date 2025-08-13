@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 import pydeck as pdk
 from urllib.parse import quote_plus
+from geopy.geocoders import Nominatim
 
 # ==========================
 # CONFIG APP
@@ -36,11 +37,11 @@ with c2:
     st.markdown(f"🌍 **Google Earth** : [{('Ouvrir dans Earth' if q else '—')}]({lien_earth})" if q else "🌍 **Google Earth** : —")
 
 # --- Géocodage adresse -> lat/lon (avec repli manuel) ---
+@st.cache_data(show_spinner=False)
 def geocode_addr(addr: str):
     if not addr.strip():
         return None
     try:
-        from geopy.geocoders import Nominatim
         geolocator = Nominatim(user_agent="mur_solaire_app")
         loc = geolocator.geocode(addr, timeout=10)
         if loc:
@@ -53,15 +54,9 @@ coords = geocode_addr(adresse) if adresse else None
 
 colA, colB = st.columns(2)
 with colA:
-    if coords:
-        lat = st.number_input("Latitude", value=coords[0], format="%.6f")
-    else:
-        lat = st.number_input("Latitude", value=46.813900, format="%.6f")
+    lat = st.number_input("Latitude", value=(coords[0] if coords else 46.813900), format="%.6f")
 with colB:
-    if coords:
-        lon = st.number_input("Longitude", value=coords[1], format="%.6f")
-    else:
-        lon = st.number_input("Longitude", value=-71.208000, format="%.6f")
+    lon = st.number_input("Longitude", value=(coords[1] if coords else -71.208000), format="%.6f")
 
 if not coords and adresse.strip():
     st.warning("Géocodage indisponible ou infructueux. Coordonnées par défaut affichées — ajuste-les au besoin.")
@@ -146,14 +141,30 @@ view_state = pdk.ViewState(
     longitude=lon, latitude=lat, zoom=15, pitch=45, bearing=float(azimuth)
 )
 
-mapbox_key = os.getenv("MAPBOX_API_KEY", None)  # optionnel
-st.pydeck_chart(pdk.Deck(
-    map_style="mapbox://styles/mapbox/light-v9",
-    mapbox_key=mapbox_key,
-    initial_view_state=view_state,
-    layers=[site_layer, arrow_layer],
-    tooltip={"html": "<b>Site</b><br/>Lat: {lat}<br/>Lon: {lon}", "style": {"color": "white"}}
-))
+# Sélection auto du provider : Mapbox si clé présente, sinon Carto (sans clé)
+tooltip = {"html": "<b>Site</b><br/>Lat: {lat}<br/>Lon: {lon}", "style": {"color": "white"}}
+mapbox_key = os.getenv("MAPBOX_API_KEY", "")
+
+if mapbox_key:
+    pdk.settings.mapbox_api_key = mapbox_key
+    deck = pdk.Deck(
+        map_provider="mapbox",
+        map_style="mapbox://styles/mapbox/light-v9",
+        initial_view_state=view_state,
+        layers=[site_layer, arrow_layer],
+        tooltip=tooltip,
+    )
+else:
+    deck = pdk.Deck(
+        map_provider="carto",
+        map_style="light",
+        initial_view_state=view_state,
+        layers=[site_layer, arrow_layer],
+        tooltip=tooltip,
+    )
+
+st.pydeck_chart(deck)
+
 
 # ==========================
 # SECTION 2 – CLIMAT & ENERGIE SOLAIRE INCIDENTE
@@ -401,6 +412,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
