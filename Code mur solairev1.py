@@ -8,7 +8,7 @@ from io import BytesIO
 # CONFIG APP
 # ==========================
 st.set_page_config(page_title="Mur solaire – Audit Flash", layout="wide")
-st.title("☀️ Outil d’audit rapide – Mur solaire (MVP)")
+st.title("Audit Flash – Mur solaire")
 st.caption("V1.0 – Prototype : estimation simple des gains thermiques, coûts, subventions et rentabilité. Basé sur des entrées clés inspirées de RETScreen.")
 
 # ==========================
@@ -304,3 +304,4 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
