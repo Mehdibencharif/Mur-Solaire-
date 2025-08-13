@@ -38,9 +38,9 @@ with loc1:
 with loc2:
     lon = st.number_input("Longitude", value=-71.208000, format="%.6f")
 with loc3:
-    # Lien Google Maps pratique
     gmap_url = f"https://www.google.com/maps?q={lat},{lon}"
     st.markdown(f"[Ouvrir dans Google Maps]({gmap_url})")
+
 # Carte rapide centrée sur le point
 site_df = pd.DataFrame({"lat": [lat], "lon": [lon]})
 st.map(site_df, zoom=12)
@@ -81,10 +81,9 @@ else:
             # Normalisation colonnes
             monthly_df.columns = [c.strip().lower() for c in monthly_df.columns]
             # Recherche colonnes
-            mcol = None
-            valcol = None
+            mcol, valcol = None, None
             for c in monthly_df.columns:
-                if "mois" in c or "month" in c:
+                if ("mois" in c) or ("month" in c):
                     mcol = c
                 if "kwh" in c:
                     valcol = c
@@ -93,6 +92,19 @@ else:
             else:
                 monthly_df = monthly_df[[mcol, valcol]].copy()
                 monthly_df.columns = ["Mois", "kWh/m²"]
+
+                # Tentative de tri correct des mois si 12 lignes
+                mois_ordre = ["jan", "fév", "fev", "mar", "avr", "mai", "jun", "jui", "aoû", "aou", "sep", "oct", "nov", "déc", "dec"]
+                if len(monthly_df) == 12:
+                    def key_mois(x):
+                        s = str(x).strip().lower()[:3]
+                        for i, m in enumerate(mois_ordre):
+                            if s == m:
+                                return i
+                        return 99
+                    monthly_df["__k"] = monthly_df["Mois"].apply(key_mois)
+                    monthly_df = monthly_df.sort_values("__k").drop(columns="__k")
+
                 annual_kwh_m2 = float(monthly_df["kWh/m²"].sum())
                 st.success(f"Irradiation annuelle reconstituée : {annual_kwh_m2:,.0f} kWh/m²·an")
                 # Graphique
@@ -146,8 +158,13 @@ with colc2:
 with colc3:
     rendement_chauffage = st.number_input("Rendement chauffage existant (%)", value=85.0, min_value=40.0, max_value=100.0, step=1.0)
 
+# Init par défaut pour éviter références avant assignation
+kwh_final_evit = 0.0
+eco_dollars = 0.0
+ges_tonnes = 0.0
+
 if annual_kwh_m2 is not None:
-    rdt = rendement_chauffage/100.0
+    rdt = max(rendement_chauffage/100.0, 1e-6)
     if energie_cible == "Gaz naturel":
         val_kwh = prix_gaz_kwh
         ges_factor = co2_kg_per_kwh_ng
@@ -159,7 +176,7 @@ if annual_kwh_m2 is not None:
         ges_factor = st.number_input("Facteur GES (kg CO₂e/kWh)", value=0.100, format="%.3f")
 
     # L’énergie solaire utile remplace l’énergie finale / le rendement du système remplacé
-    kwh_final_evit = q_util_kwh / max(rdt, 1e-6)
+    kwh_final_evit = q_util_kwh / rdt
     eco_dollars = kwh_final_evit * val_kwh
     ges_tonnes = (kwh_final_evit * ges_factor) / 1000.0
 
@@ -181,7 +198,7 @@ with colk2:
     marge_pct = st.number_input("Marge (%)", value=20.0, min_value=0.0, max_value=50.0, step=1.0)
 with colk3:
     sub_type = st.selectbox("Type de subvention", ["Aucune", "% du CAPEX", "$ par m² (plafonné)"])
-coûts
+
 capex_base = area_ft2 * (cout_mat_pi2 + cout_mo_pi2) + autres_fixes
 marge = capex_base * (marge_pct/100.0)
 capex_avant_sub = capex_base + marge
@@ -216,7 +233,12 @@ with colf2:
 with colf3:
     escal = st.number_input("Escalade prix énergie (%/an)", value=2.0, min_value=0.0, max_value=15.0, step=0.5)
 
-if annual_kwh_m2 is not None:
+# Init pour export
+npv_savings = 0.0
+npv = -capex_net
+spb = np.inf
+
+if annual_kwh_m2 is not None and eco_dollars > 0:
     r = discount/100.0
     g = escal/100.0
     # flux d’économies croissantes : S0=eco_$, croissance g, actualisation r
@@ -242,6 +264,8 @@ if annual_kwh_m2 is not None:
     plt.title("VAN cumulée – point mort")
     plt.tight_layout()
     st.pyplot(fig2)
+elif annual_kwh_m2 is not None:
+    st.info("Complète la section 4 pour calculer VAN/SPB (énergie remplacée et tarifs).")
 
 # ==========================
 # EXPORT RAPPORT
@@ -265,20 +289,18 @@ if annual_kwh_m2 is not None:
         "Marge_$": [marge],
         "Subvention_$": [sub_amount],
         "CAPEX_net_$": [capex_net],
-        "SPB_ans": [spb],
+        "SPB_ans": [spb if np.isfinite(spb) else None],
         "VAN_savings_$": [npv_savings],
         "VAN_projet_$": [npv]
     }
     df_out = pd.DataFrame(resume)
     with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
         df_out.to_excel(writer, index=False, sheet_name="Résumé")
-    st.download_button("📥 Télécharger le résumé Excel", data=out.getvalue(), mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", file_name="mur_solaire_audit_flash.xlsx")
+    st.download_button("📥 Télécharger le résumé Excel", data=out.getvalue(),
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                       file_name="mur_solaire_audit_flash.xlsx")
 else:
     st.info("Renseigner l’irradiation pour activer l’export.")
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
-# Calcul 
-
-
-
-
+# Calcul
