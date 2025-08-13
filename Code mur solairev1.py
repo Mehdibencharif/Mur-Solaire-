@@ -3,6 +3,11 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from io import BytesIO
+try:
+    import pydeck as pdk
+    _HAS_PYDECK = True
+except Exception:
+    _HAS_PYDECK = False
 
 # ==========================
 # CONFIG APP
@@ -388,5 +393,6 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
