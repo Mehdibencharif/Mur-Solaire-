@@ -3,11 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from io import BytesIO
-try:
-    import pydeck as pdk
-    _HAS_PYDECK = True
-except Exception:
-    _HAS_PYDECK = False
+from urllib.parse import quote_plus
 
 # ==========================
 # CONFIG APP
@@ -17,48 +13,44 @@ st.title("Audit Flash – Mur solaire")
 st.caption("V1.0 – Prototype : estimation simple des gains thermiques, coûts, subventions et rentabilité. Basé sur des entrées clés inspirées de RETScreen.")
 
 # ==========================
-# SECTION 1 – LOCALISATION & ORIENTATION (VISUEL)
+# SECTION 1 – LOCALISATION & ORIENTATION (SIMPLE)
 # ==========================
-st.header("1) Localisation & orientation (visuel)")
+st.header("1) Localisation & orientation (simple)")
 
-# --- Localisation du site ---
-loc1, loc2, loc3 = st.columns([1,1,2])
-with loc1:
-    lat = st.number_input(
-        "Latitude",
-        value=46.813900, format="%.6f",
-        help="Coordonnée du site en degrés décimaux (ex. 46.813900)."
-    )
-with loc2:
-    lon = st.number_input(
-        "Longitude",
-        value=-71.208000, format="%.6f",
-        help="Coordonnée du site en degrés décimaux (ex. -71.208000)."
-    )
-with loc3:
-    gmap_url = f"https://www.google.com/maps?q={lat},{lon}"
-    st.markdown(f"[🗺️ Ouvrir dans Google Maps]({gmap_url})")
-    with st.expander("Comment mesurer l’azimut ?"):
-        st.write(
-            "- L’**azimut** est mesuré **depuis le Nord** en degrés, **sens horaire**.\n"
-            "- **0°** = Nord, **90°** = Est, **180°** = Sud, **270°** = Ouest.\n"
-            "- Utilise un plan/croquis ou Google Maps (outil règle) pour estimer l’angle.\n"
-            "- ⚠️ La valeur **ne doit pas être négative** (intervalle 0–359.99°)."
-        )
+# Adresse libre (pas de géocodage dans l'app : Google gère la recherche côté web)
+adresse = st.text_input(
+    "Adresse du site (ou point d’intérêt)",
+    value="Saint-Augustin-de-Desmaures, QC",
+    help="Entre une adresse, un code postal ou le nom du site (ex. 'Usine ABC, Rue X, Ville')."
+)
 
-# --- Orientation & conditions visuelles ---
+# Liens rapides (ouvre dans un nouvel onglet)
+if adresse.strip():
+    q = quote_plus(adresse.strip())
+    lien_maps  = f"https://www.google.com/maps/search/?api=1&query={q}"
+    lien_earth = f"https://earth.google.com/web/search/{q}"
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(f"🔗 **Google Maps** : [Ouvrir dans Maps]({lien_maps})")
+    with c2:
+        st.markdown(f"🌍 **Google Earth** : [Ouvrir dans Earth]({lien_earth})")
+
+    st.caption("Astuce : dans Google Maps, utilise l’outil règle/angle pour estimer l’azimut du mur.")
+
+# Orientation & conditions visuelles (sans surface ici)
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     azimuth = st.number_input(
         "Azimut du mur (°)",
         value=151.22, min_value=0.0, max_value=359.99, step=0.01,
-        help="Angle 0–359.99° mesuré depuis le Nord (sens horaire). 151° ≈ Sud-Sud-Est."
+        help="Angle mesuré depuis le Nord, en sens horaire. 0=N, 90=E, 180=S, 270=O. ⚠️ Jamais négatif."
     )
 with col2:
     tilt = st.number_input(
         "Inclinaison (°)",
         value=90.0, min_value=0.0, max_value=90.0, step=1.0,
-        help="0° = horizontal (toit plat), 90° = vertical (façade)."
+        help="0° = horizontal (toit), 90° = vertical (façade)."
     )
 with col3:
     shading = st.slider(
@@ -70,81 +62,24 @@ with col4:
     wind_ref = st.number_input(
         "Vent (m/s – indicatif)",
         value=3.0, min_value=0.0, step=0.5,
-        help="Vitesse de vent de référence (visuel). Utilisée ici pour l’affichage/contextualisation."
+        help="Valeur indicative pour contexte. Non utilisée dans les calculs MVP."
     )
 
-# --- Carte avancée (pydeck) avec flèche d’azimut ---
-# Construction d’une flèche de 200 m dans la direction d’azimut
-def destination_point(lat_deg, lon_deg, bearing_deg, distance_m):
-    # approximation locale simple (suffisant pour tracer une flèche courte)
-    R = 6371000.0  # rayon Terre (m)
-    br = np.deg2rad(bearing_deg)
-    lat1 = np.deg2rad(lat_deg)
-    lon1 = np.deg2rad(lon_deg)
-    lat2 = np.arcsin(np.sin(lat1)*np.cos(distance_m/R) + np.cos(lat1)*np.sin(distance_m/R)*np.cos(br))
-    lon2 = lon1 + np.arctan2(np.sin(br)*np.sin(distance_m/R)*np.cos(lat1),
-                             np.cos(distance_m/R)-np.sin(lat1)*np.sin(lat2))
-    return np.rad2deg(lat2), np.rad2deg(lon2)
-
-end_lat, end_lon = destination_point(lat, lon, azimuth, 200.0)
-
-# Données pour pydeck
-point_df = pd.DataFrame([{"lat": lat, "lon": lon}])
-line_df = pd.DataFrame([
-    {"lat": lat, "lon": lon},
-    {"lat": end_lat, "lon": end_lon},
-])
-
-# Couche point (site)
-site_layer = pdk.Layer(
-    "ScatterplotLayer",
-    data=point_df,
-    get_position='[lon, lat]',
-    get_radius=6,
-    radius_scale=10,
-    pickable=True,
-)
-
-# Couche ligne (flèche azimut)
-arrow_layer = pdk.Layer(
-    "PathLayer",
-    data=[{"path": line_df[["lon","lat"]].values.tolist()}],
-    get_width=4,
-    width_min_pixels=2,
-    pickable=False,
-)
-
-# Vue de la carte
-view_state = pdk.ViewState(
-    longitude=lon,
-    latitude=lat,
-    zoom=15,
-    pitch=45,
-    bearing=float(azimuth)  # pour donner une légère sensation d'orientation
-)
-
-# Titre overlay
-tooltip = {"html": "<b>Site</b><br/>Lat: {lat}<br/>Lon: {lon}", "style": {"color": "white"}}
-
-st.pydeck_chart(pdk.Deck(
-    map_style="mapbox://styles/mapbox/light-v9",
-    initial_view_state=view_state,
-    layers=[site_layer, arrow_layer],
-    tooltip=tooltip
-))
-
-# Aide visuelle
-st.caption(
-    f"🧭 **Azimut**: {azimuth:.2f}° • "
-    f"📐 **Inclinaison**: {tilt:.0f}° • "
-    f"🌫️ **Ombrage**: {shading}% • "
-    f"💨 **Vent (indicatif)**: {wind_ref:.1f} m/s"
-)
+# Affichage de la direction cardinale (optionnel, utile pour validation)
+def azimut_cardinal(a):
+    # 16 secteurs (N, NNE, NE, ENE, E, ...); centre sur N=0°
+    labels = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSO","SO","OSO","O","ONO","NO","NNO"]
+    idx = int((a % 360) / 22.5 + 0.5) % 16
+    return labels[idx]
 
 st.info(
-    "Ce bloc est **visuel** : il sert à valider l’emplacement et l’orientation du mur, "
-    "ainsi que des conditions contextuelles (ombrage, vent). La surface du capteur est "
-    "gérée plus loin dans les sections de performance et coûts."
+    f"📍 **Adresse** : {adresse if adresse.strip() else '—'}  \n"
+    f"🧭 **Azimut** : {azimuth:.2f}° ({azimut_cardinal(azimuth)})  •  "
+    f"📐 **Inclinaison** : {tilt:.0f}°  •  "
+    f"🌫️ **Ombrage** : {shading}%  •  "
+    f"💨 **Vent (indicatif)** : {wind_ref:.1f} m/s  \n\n"
+    "Ce bloc est **visuel** : il sert à positionner le site et à valider l’orientation. "
+    "La surface du capteur est gérée plus loin (performances, coûts)."
 )
 
 # ==========================
@@ -393,6 +328,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
