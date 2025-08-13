@@ -12,51 +12,135 @@ st.title("Audit Flash – Mur solaire")
 st.caption("V1.0 – Prototype : estimation simple des gains thermiques, coûts, subventions et rentabilité. Basé sur des entrées clés inspirées de RETScreen.")
 
 # ==========================
-# SIDEBAR – PARAMÈTRES GÉNÉRAUX
+# SECTION 1 – LOCALISATION & ORIENTATION (VISUEL)
 # ==========================
-st.sidebar.header("Paramètres généraux")
-zone = st.sidebar.selectbox("Zone climatique / Ville de référence (pour repères)", [
-    "Québec – Général",
-    "Montréal",
-    "Québec",
-    "Sherbrooke",
-    "Saguenay"
-], index=0)
+st.header("1) Localisation & orientation (visuel)")
 
-with st.sidebar.expander("Hypothèses – Conversion & facteurs"):
-    co2_kg_per_kwh_ng = st.number_input("Facteur GES gaz naturel (kg CO₂e/kWh PCI)", value=0.198, format="%.3f")
-    co2_kg_per_kwh_el = st.number_input("Facteur GES électricité (kg CO₂e/kWh)", value=0.0017, format="%.4f")
-    weeks_heating = st.number_input("Semaines de chauffe/an couvertes par le mur", min_value=1, max_value=52, value=28, step=1)
-
-# ==========================
-# SECTION 1 – GÉOMÉTRIE & ORIENTATION
-# ==========================
-# --- Localisation du site (Option A : sans API) ---
+# --- Localisation du site ---
 loc1, loc2, loc3 = st.columns([1,1,2])
 with loc1:
-    lat = st.number_input("Latitude", value=46.813900, format="%.6f")
+    lat = st.number_input(
+        "Latitude",
+        value=46.813900, format="%.6f",
+        help="Coordonnée du site en degrés décimaux (ex. 46.813900)."
+    )
 with loc2:
-    lon = st.number_input("Longitude", value=-71.208000, format="%.6f")
+    lon = st.number_input(
+        "Longitude",
+        value=-71.208000, format="%.6f",
+        help="Coordonnée du site en degrés décimaux (ex. -71.208000)."
+    )
 with loc3:
     gmap_url = f"https://www.google.com/maps?q={lat},{lon}"
-    st.markdown(f"[Ouvrir dans Google Maps]({gmap_url})")
+    st.markdown(f"[🗺️ Ouvrir dans Google Maps]({gmap_url})")
+    with st.expander("Comment mesurer l’azimut ?"):
+        st.write(
+            "- L’**azimut** est mesuré **depuis le Nord** en degrés, **sens horaire**.\n"
+            "- **0°** = Nord, **90°** = Est, **180°** = Sud, **270°** = Ouest.\n"
+            "- Utilise un plan/croquis ou Google Maps (outil règle) pour estimer l’angle.\n"
+            "- ⚠️ La valeur **ne doit pas être négative** (intervalle 0–359.99°)."
+        )
 
-# Carte rapide centrée sur le point
-site_df = pd.DataFrame({"lat": [lat], "lon": [lon]})
-st.map(site_df, zoom=12)
-
-# --- Géométrie & orientation de la façade ---
-col1, col2, col3 = st.columns(3)
+# --- Orientation & conditions visuelles ---
+col1, col2, col3, col4 = st.columns(4)
 with col1:
-    area_ft2 = st.number_input("Surface utile du mur solaire (pi²)", min_value=10.0, value=1500.0, step=10.0)
-    area_m2 = area_ft2 * 0.092903
-    st.metric("Surface (m²)", f"{area_m2:,.2f}")
+    azimuth = st.number_input(
+        "Azimut du mur (°)",
+        value=151.22, min_value=0.0, max_value=359.99, step=0.01,
+        help="Angle 0–359.99° mesuré depuis le Nord (sens horaire). 151° ≈ Sud-Sud-Est."
+    )
 with col2:
-    azimuth = st.number_input("Azimut mur (° depuis le Nord, sens horaire)", value=151.22, min_value=0.0, max_value=359.99, step=0.01)
-    tilt = st.number_input("Inclinaison (° vs l'horizontale) – mur vertical=90°", value=90.0, min_value=0.0, max_value=90.0, step=1.0)
+    tilt = st.number_input(
+        "Inclinaison (°)",
+        value=90.0, min_value=0.0, max_value=90.0, step=1.0,
+        help="0° = horizontal (toit plat), 90° = vertical (façade)."
+    )
 with col3:
-    shading = st.slider("Pertes d’ombrage globales (%)", min_value=0, max_value=90, value=10, step=1)
-    avail = st.slider("Disponibilité système (% fonctionnement)", min_value=50, max_value=100, value=95, step=1)
+    shading = st.slider(
+        "Ombrage global (%)",
+        min_value=0, max_value=90, value=10, step=1,
+        help="Estimation des pertes d’irradiation dues aux obstacles proches/lointains."
+    )
+with col4:
+    wind_ref = st.number_input(
+        "Vent (m/s – indicatif)",
+        value=3.0, min_value=0.0, step=0.5,
+        help="Vitesse de vent de référence (visuel). Utilisée ici pour l’affichage/contextualisation."
+    )
+
+# --- Carte avancée (pydeck) avec flèche d’azimut ---
+# Construction d’une flèche de 200 m dans la direction d’azimut
+def destination_point(lat_deg, lon_deg, bearing_deg, distance_m):
+    # approximation locale simple (suffisant pour tracer une flèche courte)
+    R = 6371000.0  # rayon Terre (m)
+    br = np.deg2rad(bearing_deg)
+    lat1 = np.deg2rad(lat_deg)
+    lon1 = np.deg2rad(lon_deg)
+    lat2 = np.arcsin(np.sin(lat1)*np.cos(distance_m/R) + np.cos(lat1)*np.sin(distance_m/R)*np.cos(br))
+    lon2 = lon1 + np.arctan2(np.sin(br)*np.sin(distance_m/R)*np.cos(lat1),
+                             np.cos(distance_m/R)-np.sin(lat1)*np.sin(lat2))
+    return np.rad2deg(lat2), np.rad2deg(lon2)
+
+end_lat, end_lon = destination_point(lat, lon, azimuth, 200.0)
+
+# Données pour pydeck
+point_df = pd.DataFrame([{"lat": lat, "lon": lon}])
+line_df = pd.DataFrame([
+    {"lat": lat, "lon": lon},
+    {"lat": end_lat, "lon": end_lon},
+])
+
+# Couche point (site)
+site_layer = pdk.Layer(
+    "ScatterplotLayer",
+    data=point_df,
+    get_position='[lon, lat]',
+    get_radius=6,
+    radius_scale=10,
+    pickable=True,
+)
+
+# Couche ligne (flèche azimut)
+arrow_layer = pdk.Layer(
+    "PathLayer",
+    data=[{"path": line_df[["lon","lat"]].values.tolist()}],
+    get_width=4,
+    width_min_pixels=2,
+    pickable=False,
+)
+
+# Vue de la carte
+view_state = pdk.ViewState(
+    longitude=lon,
+    latitude=lat,
+    zoom=15,
+    pitch=45,
+    bearing=float(azimuth)  # pour donner une légère sensation d'orientation
+)
+
+# Titre overlay
+tooltip = {"html": "<b>Site</b><br/>Lat: {lat}<br/>Lon: {lon}", "style": {"color": "white"}}
+
+st.pydeck_chart(pdk.Deck(
+    map_style="mapbox://styles/mapbox/light-v9",
+    initial_view_state=view_state,
+    layers=[site_layer, arrow_layer],
+    tooltip=tooltip
+))
+
+# Aide visuelle
+st.caption(
+    f"🧭 **Azimut**: {azimuth:.2f}° • "
+    f"📐 **Inclinaison**: {tilt:.0f}° • "
+    f"🌫️ **Ombrage**: {shading}% • "
+    f"💨 **Vent (indicatif)**: {wind_ref:.1f} m/s"
+)
+
+st.info(
+    "Ce bloc est **visuel** : il sert à valider l’emplacement et l’orientation du mur, "
+    "ainsi que des conditions contextuelles (ombrage, vent). La surface du capteur est "
+    "gérée plus loin dans les sections de performance et coûts."
+)
 
 # ==========================
 # SECTION 2 – CLIMAT & ENERGIE SOLAIRE INCIDENTE
@@ -304,4 +388,5 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
