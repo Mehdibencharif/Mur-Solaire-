@@ -104,22 +104,31 @@ with col_noon:
                                  help="Calcule l’azimut à l’instant de hauteur maximale du soleil.")
 
 def compute_solar_noon(lat, lon, date_obj, tzinfo):
-    """Retourne le datetime local du midi solaire (si possible), sinon None."""
-    # 1) Essai avec astral
+    # A) Essai Astral "v2+"
+    try:
+        from astral import Observer
+        from astral.sun import solar_noon
+        tzname = tzinfo.zone if tzinfo else "UTC"
+        obs = Observer(latitude=lat, longitude=lon)
+        noon_dt = solar_noon(date_obj, obs, tzname)
+        return noon_dt
+    except Exception:
+        pass
+
+    # B) Essai Astral "legacy"
     try:
         from astral.location import Location
         loc = Location()
         loc.latitude = lat
         loc.longitude = lon
         loc.timezone = tzinfo.zone if tzinfo else "UTC"
-        # astral renvoie le midi solaire local automatiquement
-        noon_dt = loc.solar_noon(date_obj)
-        return noon_dt
+        return loc.solar_noon(date_obj)
     except Exception:
         pass
 
-    # 2) Fallback simple : 12:00 locale (approximation)
+    # C) Fallback : 12:00 locale
     try:
+        import datetime as dt
         naive = dt.datetime.combine(date_obj, dt.time(12, 0))
         return tzinfo.localize(naive) if tzinfo else naive
     except Exception:
@@ -609,6 +618,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
