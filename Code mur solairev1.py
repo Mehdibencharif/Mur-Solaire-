@@ -260,7 +260,20 @@ st.pydeck_chart(deck, use_container_width=True)
 # SECTION 2 — PARAMÈTRES CLIMATIQUES (PRÉREMPLI TYPE RETSCREEN)
 # =========================================================
 st.header("2) Paramètres climatiques")
+unit_mode = st.radio("Unités", ["Métrique (SI)", "Impériales"], horizontal=True)
 
+# Helpers conversion
+FT2_PER_M2 = 10.7639
+KBTU_PER_KWH = 3.412/1.0
+CFM_PER_LPS = 2.11888
+
+def m2_to_ft2(x): return x * FT2_PER_M2
+def ft2_to_m2(x): return x / FT2_PER_M2
+def kwhm2_to_kbtuft2(x): return x * 0.317097  # 1 kWh/m² ≈ 0.317 kBtu/ft²
+def kbtuft2_to_kwhm2(x): return x / 0.317097
+def lps_to_cfm(x): return x * CFM_PER_LPS
+def cfm_to_lps(x): return x / CFM_PER_LPS
+    
 # En-tête méta
 colh1, colh2, colh3 = st.columns(3)
 with colh1:
@@ -490,19 +503,19 @@ with st.expander("Portion d'utilisation par mois (cas proposé) — %", expanded
 with st.expander("Paramètres du capteur solaire à air", expanded=True):
     TYPES = {
         "Mur solaire sans vitrage (UTSC)": {
-            "absorptivite": 0.94,   # métal perforé noir
+            "absorptivite": 0.94,
             "facteur_correctif": 1.00,
             "comment": "Mur solaire perforé, tirage mécanique. ΔT élevé par temps ensoleillé."
         },
         "Capteur à air vitré": {
             "absorptivite": 0.95,
             "facteur_correctif": 1.05,
-            "comment": "Caisson vitré + absorbeur. Meilleur en inter-saison, plus de pertes nocturnes."
+            "comment": "Caisson vitré + absorbeur. Meilleur en intersaison, pertes nocturnes ↑."
         },
         "Vitré + absorbeur sélectif": {
             "absorptivite": 0.96,
             "facteur_correctif": 1.10,
-            "comment": "Absorbeur sélectif, performance améliorée faible éclairement, coût ↑."
+            "comment": "Absorbeur sélectif, meilleur à faible éclairement, coût ↑."
         },
     }
 
@@ -511,7 +524,10 @@ with st.expander("Paramètres du capteur solaire à air", expanded=True):
 
     colc1, colc2, colc3 = st.columns(3)
     with colc1:
-        absorptivite = st.number_input("Absorptivité du capteur", 0.80, 0.99, value=float(defaults["absorptivite"]), step=0.01)
+        absorptivite = st.number_input(
+            "Absorptivité du capteur", min_value=0.80, max_value=0.99,
+            value=float(defaults["absorptivite"]), step=0.01
+        )
         couleur = st.selectbox("Couleur/finition", ["Noir", "Anthracite", "Autre"], index=0)
     with colc2:
         facteur_correctif = st.number_input(
@@ -519,39 +535,72 @@ with st.expander("Paramètres du capteur solaire à air", expanded=True):
             min_value=0.50, max_value=2.00, value=float(defaults["facteur_correctif"]), step=0.01,
             help="Facteur multiplicatif pour caler le modèle (ombrage résiduel, pertes/inconnues, gains d’aspiration)."
         )
+        if facteur_correctif > 1.20:
+            st.warning("Facteur > 1.20 : vérifie et documente la raison (aspiration, mesures, etc.).")
     with colc3:
-        surface_m2 = st.number_input("Surface de capteur", min_value=1.0, value=150.0, step=1.0, help="Surface nette exposée (m²).")
+        surface_m2 = st.number_input(
+            "Surface de capteur (m²)", min_value=1.0, value=150.0, step=1.0,
+            help="Surface nette exposée."
+        )
+
+    # Garantir l’existence des paramètres d’ombrage/vent
+    st.session_state.setdefault("ombrage_saison", 10)
+    st.session_state.setdefault("atten_vent", 0)
+
+    ombrage_saison = st.slider(
+        "Ombrage sur le capteur – période d'utilisation (%)",
+        0, 90, int(st.session_state["ombrage_saison"]), step=1
+    )
+    st.session_state["ombrage_saison"] = ombrage_saison
+
+    atten_vent = st.slider(
+        "Atténuation des vents – saison d'utilisation (%)",
+        0, 50, int(st.session_state["atten_vent"]), step=1,
+        help="Pertes supplémentaires dues au vent."
+    )
+    st.session_state["atten_vent"] = atten_vent
 
     st.caption(f"ℹ️ {defaults['comment']}")
 
 # -- Application des portions d'utilisation mensuelles sur l'irradiation (si mensuelle fournie) --
-#   On calcule une série "kWh/m² utile" = irradiation * (utilisation%/100) * (1 - ombrage) * (1 - atténuation vent)
-mois_map = {m:i for i,m in enumerate(["Jan","Fév","Mar","Avr","Mai","Juin","Juil","Août","Sep","Oct","Nov","Déc"])}
+# kWh/m² utile = irradiation * (utilisation%/100) * (1 - ombrage) * (1 - atténuation vent)
 
-perte_ombrage = (100 - ombrage_saison)/100.0
-perte_vent = (100 - atten_vent)/100.0
+# Sécurise usage_df (si non défini plus haut)
+if "usage_df" not in locals():
+    mois_labels = ["Jan","Fév","Mar","Avr","Mai","Juin","Juil","Août","Sep","Oct","Nov","Déc"]
+    usage_df = pd.DataFrame({"Mois": mois_labels, "Utilisation %": [100]*12})
+
+# Pertes (bornées 0–1)
+perte_ombrage = max(0.0, 1.0 - ombrage_saison/100.0)
+perte_vent    = max(0.0, 1.0 - atten_vent/100.0)
 facteur_pertes = perte_ombrage * perte_vent
 
 monthly_used = None
-if monthly_df is not None and "kWh/m²" in monthly_df.columns:
-    # On essaie d'aligner les noms de mois
-    def _normalize_mois(x):
-        s = str(x).strip()
-        s3 = s[:3].lower()
+if ("monthly_df" in locals()) and (monthly_df is not None) and ("kWh/m²" in monthly_df.columns):
+    # Normalisation robuste des mois FR/EN
+    def _normalize_mois(x: str) -> str:
+        s = str(x).strip().lower()[:3]
         mapping = {
-            "jan":"Jan","fév":"Fév","fev":"Fév","mar":"Mar","avr":"Avr","mai":"Mai",
-            "jun":"Juin","jui":"Juil","aoû":"Août","aou":"Août","sep":"Sep","oct":"Oct","nov":"Nov","déc":"Déc","dec":"Déc",
-            "jan":"Jan","feb":"Fév","apr":"Avr","aug":"Août","jul":"Juil","jun":"Juin","may":"Mai","mar":"Mar"
+            # Français
+            "jan":"Jan", "fév":"Fév", "fev":"Fév", "mar":"Mar", "avr":"Avr", "mai":"Mai",
+            "jui":"Juil", "jun":"Juin", "aoû":"Août", "aou":"Août", "sep":"Sep", "oct":"Oct", "nov":"Nov", "déc":"Déc", "dec":"Déc",
+            # Anglais
+            "feb":"Fév", "apr":"Avr", "may":"Mai", "jul":"Juil", "aug":"Août"
         }
-        return mapping.get(s3, s)
+        return mapping.get(s, s.title())
+
     mdf = monthly_df.copy()
     mdf["Mois"] = mdf["Mois"].apply(_normalize_mois)
-    # Merge avec usage
+
+    # Merge avec usage (%)
     tmp = pd.merge(mdf, usage_df, on="Mois", how="left")
-    tmp["Utilisation %"] = tmp["Utilisation %"].fillna(100)
+    tmp["Utilisation %"] = pd.to_numeric(tmp["Utilisation %"], errors="coerce").fillna(100).clip(0, 100)
+
+    # kWh/m² utile
     tmp["kWh/m² utile"] = tmp["kWh/m²"] * (tmp["Utilisation %"]/100.0) * facteur_pertes
     monthly_used = tmp[["Mois","kWh/m²","Utilisation %","kWh/m² utile"]]
-    # Graph utile
+
+    # Graphique utile
     fig2 = plt.figure(figsize=(6,3))
     plt.bar(monthly_used["Mois"], monthly_used["kWh/m² utile"])
     plt.ylabel("kWh/m² utile")
@@ -583,7 +632,7 @@ energie_solaire_utile_kwh = (annual_kwh_m2_utile or 0) * surface_m2
 st.caption(f"Énergie solaire utile reçue (avant conversion aéraulique/ΔT) ≈ **{energie_solaire_utile_kwh:,.0f} kWh/an**")
 
 # ==========================
-# SECTION 3 – PERFORMANCE COLLECTEUR (UTC / mur solaire)
+# SECTION 4 – PERFORMANCE COLLECTEUR (UTC / mur solaire)
 # ==========================
 st.header("4) Performance – Mur solaire (transpiré non vitré)")
 colp1, colp2, colp3 = st.columns(3)
@@ -768,6 +817,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
