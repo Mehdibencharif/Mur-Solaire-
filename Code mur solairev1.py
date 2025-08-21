@@ -178,7 +178,8 @@ else:
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     azimuth = st.number_input(
-        "Azimut du mur (°)", value=float(st.session_state.get("azimuth", 151.22)),
+        "Azimut du mur (°)",
+        value=float(azimuth_default),              # ← ICI on met la valeur auto
         min_value=0.0, max_value=359.99, step=0.01,
         help="0–359.99°, depuis le Nord. 151° ≈ Sud-Sud-Est."
     )
@@ -608,6 +609,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
