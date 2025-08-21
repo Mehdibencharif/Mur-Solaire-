@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
+import matplotlib.pyplot as plt
 from urllib.parse import quote_plus
 from geopy.geocoders import Nominatim
 
@@ -375,17 +376,36 @@ with st.expander("Synthèse annuelle"):
 # ==========================
 # SECTION 3 – Systéme de chauffage solaire de l'air 
 # ==========================
-st.header("3) Systéme de chauffage solaire de l'air ")
-mode_meteo = st.radio("Source d’irradiation (kWh/m²·an ou mensuel)", ["Saisie rapide (annuelle)", "Tableau mensuel (upload RETScreen .csv/.xlsx)"]) 
+st.header("3) Système de chauffage solaire de l’air")
+
+# -- Positionnement solaire (RETScreen : Fixe) --
+with st.expander("Évaluation des ressources (positionnement solaire)", expanded=True):
+    st.markdown("**Système de positionnement solaire** : *Fixe* (mur)")
+    # On réutilise tilt & azimuth déjà saisis aux sections précédentes
+    col_pos1, col_pos2 = st.columns(2)
+    with col_pos1:
+        st.number_input("Inclinaison (°)", value=float(tilt), key="tilt_echo", help="0°=horizontal, 90°=vertical", disabled=True)
+    with col_pos2:
+        st.number_input("Azimut (°)", value=float(azimuth), key="azimuth_echo", help="0°=Nord; 180°=Sud", disabled=True)
+
+# -- Source d'irradiation mensuelle/annuelle --
+mode_meteo = st.radio(
+    "Source d’irradiation sur **plan du mur** (kWh/m²·an ou mensuel)",
+    ["Saisie rapide (annuelle)", "Tableau mensuel (upload RETScreen .csv/.xlsx)"]
+)
 
 annual_kwh_m2 = None
 monthly_df = None
 
 if mode_meteo == "Saisie rapide (annuelle)":
-    annual_kwh_m2 = st.number_input("Irradiation annuelle sur plan du mur (kWh/m²·an)", value=350.0, min_value=50.0, max_value=1200.0, step=10.0)
-    st.caption("Astuce : pour un mur orienté SSE/SE au Québec, une valeur d’ordre 300–500 kWh/m²·an sur plan vertical est courante. Remplacer par vos données RETScreen si disponibles.")
+    annual_kwh_m2 = st.number_input(
+        "Irradiation **annuelle** sur plan du mur (kWh/m²·an)",
+        value=350.0, min_value=50.0, max_value=1500.0, step=10.0,
+        help="Valeur sur plan **vertical** avec ton azimut réel. Idéalement issue de RETScreen/mesures."
+    )
+    st.caption("Astuce : au Québec, mur S–SSE typique : ~300–500 kWh/m²·an sur plan vertical. Utilise RETScreen si possible.")
 else:
-    up = st.file_uploader("Importer un fichier mensuel RETScreen (colonnes Mois, kWh/m²)", type=["csv", "xlsx"]) 
+    up = st.file_uploader("Importer un **mensuel RETScreen** (colonnes Mois, kWh/m² sur plan du mur)", type=["csv", "xlsx"])
     if up is not None:
         try:
             if up.name.lower().endswith(".csv"):
@@ -393,35 +413,43 @@ else:
             else:
                 monthly_df = pd.read_excel(up)
             # Normalisation colonnes
-            monthly_df.columns = [c.strip().lower() for c in monthly_df.columns]
-            # Recherche colonnes
-            mcol, valcol = None, None
-            for c in monthly_df.columns:
-                if ("mois" in c) or ("month" in c):
-                    mcol = c
-                if "kwh" in c:
-                    valcol = c
-            if mcol is None or valcol is None:
-                st.error("Le fichier doit contenir une colonne Mois et une colonne d’irradiation (kWh/m²).")
-            else:
-                monthly_df = monthly_df[[mcol, valcol]].copy()
-                monthly_df.columns = ["Mois", "kWh/m²"]
+            monthly_df.columns = [str(c).strip().lower() for c in monthly_df.columns]
+            # Détection colonnes
+            mcol = next((c for c in monthly_df.columns if ("mois" in c) or ("month" in c)), None)
+            vcol = next((c for c in monthly_df.columns if ("kwh" in c) and ("/m²" in c or "m2" in c or "per m2" in c or "per m²" in c)), None)
+            if vcol is None:
+                # fallback si le titre est "kwh/m2" sans slash m² détectable
+                vcol = next((c for c in monthly_df.columns if "kwh" in c), None)
 
-                # Tentative de tri correct des mois si 12 lignes
+            if mcol is None or vcol is None:
+                st.error("Le fichier doit contenir une colonne **Mois** et une colonne d’irradiation **kWh/m²**.")
+            else:
+                dfm = monthly_df[[mcol, vcol]].copy()
+                dfm.columns = ["Mois", "kWh/m²"]
+
+                # Tri des mois si 12 lignes
                 mois_ordre = ["jan", "fév", "fev", "mar", "avr", "mai", "jun", "jui", "aoû", "aou", "sep", "oct", "nov", "déc", "dec"]
-                if len(monthly_df) == 12:
+                if len(dfm) == 12:
                     def key_mois(x):
                         s = str(x).strip().lower()[:3]
+                        # mapping pour juin/juil en fr/en
+                        s = s.replace("jun", "jun").replace("jui", "jui")
                         for i, m in enumerate(mois_ordre):
                             if s == m:
                                 return i
+                        # mapping anglais
+                        en = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+                        if s in en:
+                            return en.index(s)
                         return 99
-                    monthly_df["__k"] = monthly_df["Mois"].apply(key_mois)
-                    monthly_df = monthly_df.sort_values("__k").drop(columns="__k")
+                    dfm["__k"] = dfm["Mois"].apply(key_mois)
+                    dfm = dfm.sort_values("__k").drop(columns="__k").reset_index(drop=True)
 
+                monthly_df = dfm
                 annual_kwh_m2 = float(monthly_df["kWh/m²"].sum())
-                st.success(f"Irradiation annuelle reconstituée : {annual_kwh_m2:,.0f} kWh/m²·an")
-                # Graphique
+                st.success(f"Irradiation **annuelle** reconstituée : **{annual_kwh_m2:,.0f} kWh/m²·an**")
+
+                # Graphique mensuel
                 fig = plt.figure(figsize=(6,3))
                 plt.bar(monthly_df["Mois"].astype(str), monthly_df["kWh/m²"])
                 plt.ylabel("kWh/m²")
@@ -430,12 +458,110 @@ else:
                 plt.tight_layout()
                 st.pyplot(fig)
         except Exception as e:
-            st.error(f"Erreur lecture fichier : {e}")
+            st.error(f"Erreur de lecture : {e}")
+
+# -- Portion d'utilisation par mois (RETScreen : 100% par défaut) --
+with st.expander("Portion d'utilisation par mois (cas proposé) — %", expanded=False):
+    # Table par défaut 12 mois à 100%
+    mois_labels = ["Jan","Fév","Mar","Avr","Mai","Juin","Juil","Août","Sep","Oct","Nov","Déc"]
+    usage_default = pd.DataFrame({"Mois": mois_labels, "Utilisation %": [100]*12})
+    usage_df = st.data_editor(
+        usage_default,
+        num_rows="fixed",
+        use_container_width=True,
+        help="Mettre 0–100% selon la saison d'utilisation réelle."
+    )
+    # Normalisation bornes
+    usage_df["Utilisation %"] = usage_df["Utilisation %"].clip(lower=0, upper=100)
+
+# -- Paramètres du capteur (style RETScreen) --
+with st.expander("Paramètres du capteur solaire à air", expanded=True):
+    colc1, colc2, colc3 = st.columns(3)
+    with colc1:
+        type_capteur = st.selectbox("Type", ["Sans vitrage"], index=0, help="Equivalent au champ RETScreen.")
+        objectif = st.selectbox("Objectif de conception", ["Forte hausse de température", "Modérée", "Préchauffage léger"], index=0)
+        couleur = st.selectbox("Couleur du capteur", ["Noir", "Anthracite", "Autre"], index=0)
+    with colc2:
+        absorptivite = st.number_input("Absorptivité du capteur", min_value=0.80, max_value=0.99, value=0.94, step=0.01)
+        facteur_rend = st.number_input("Facteur de rendement", min_value=0.5, max_value=1.2, value=1.0, step=0.01,
+                                       help="Correction performance globale (0.8–1.0 typ.)")
+        surface_m2 = st.number_input("Surface du capteur (m²)", min_value=1.0, value=150.0, step=1.0)
+    with colc3:
+        ombrage_saison = st.slider("Ombrage sur le capteur – période d'utilisation (%)", 0, 90, 10, step=1)
+        atten_vent = st.slider("Atténuation des vents – saison d'utilisation (%)", 0, 50, 0, step=1,
+                               help="Pertes supplémentaires dues au vent")
+        p_vent_sup_kw = st.number_input("Puissance suppl. de ventilation (kW)", min_value=0.0, value=0.0, step=0.1)
+
+    cole1, cole2, cole3 = st.columns(3)
+    with cole1:
+        prix_kwh = st.number_input("Prix de l'électricité ($/kWh)", min_value=0.00, value=0.10, step=0.01)
+    with cole2:
+        capex = st.number_input("Coûts d’investissement ($)", min_value=0.0, value=0.0, step=1000.0)
+    with cole3:
+        opex_savings = st.number_input("Coûts d’exploitation & entretien (économies) ($/an)", min_value=0.0, value=0.0, step=100.0)
+
+# -- Application des portions d'utilisation mensuelles sur l'irradiation (si mensuelle fournie) --
+#   On calcule une série "kWh/m² utile" = irradiation * (utilisation%/100) * (1 - ombrage) * (1 - atténuation vent)
+mois_map = {m:i for i,m in enumerate(["Jan","Fév","Mar","Avr","Mai","Juin","Juil","Août","Sep","Oct","Nov","Déc"])}
+
+perte_ombrage = (100 - ombrage_saison)/100.0
+perte_vent = (100 - atten_vent)/100.0
+facteur_pertes = perte_ombrage * perte_vent
+
+monthly_used = None
+if monthly_df is not None and "kWh/m²" in monthly_df.columns:
+    # On essaie d'aligner les noms de mois
+    def _normalize_mois(x):
+        s = str(x).strip()
+        s3 = s[:3].lower()
+        mapping = {
+            "jan":"Jan","fév":"Fév","fev":"Fév","mar":"Mar","avr":"Avr","mai":"Mai",
+            "jun":"Juin","jui":"Juil","aoû":"Août","aou":"Août","sep":"Sep","oct":"Oct","nov":"Nov","déc":"Déc","dec":"Déc",
+            "jan":"Jan","feb":"Fév","apr":"Avr","aug":"Août","jul":"Juil","jun":"Juin","may":"Mai","mar":"Mar"
+        }
+        return mapping.get(s3, s)
+    mdf = monthly_df.copy()
+    mdf["Mois"] = mdf["Mois"].apply(_normalize_mois)
+    # Merge avec usage
+    tmp = pd.merge(mdf, usage_df, on="Mois", how="left")
+    tmp["Utilisation %"] = tmp["Utilisation %"].fillna(100)
+    tmp["kWh/m² utile"] = tmp["kWh/m²"] * (tmp["Utilisation %"]/100.0) * facteur_pertes
+    monthly_used = tmp[["Mois","kWh/m²","Utilisation %","kWh/m² utile"]]
+    # Graph utile
+    fig2 = plt.figure(figsize=(6,3))
+    plt.bar(monthly_used["Mois"], monthly_used["kWh/m² utile"])
+    plt.ylabel("kWh/m² utile")
+    plt.title("Irradiation utile (pondérée utilisation & pertes)")
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    st.pyplot(fig2)
+
+# -- Irradiation annuelle "utile" sur m²
+if monthly_used is not None:
+    annual_kwh_m2_utile = float(monthly_used["kWh/m² utile"].sum())
+elif annual_kwh_m2 is not None:
+    annual_kwh_m2_utile = float(annual_kwh_m2) * facteur_pertes  # si pas de saison mensuelle, on applique pertes globales
+else:
+    annual_kwh_m2_utile = None
+
+# --- Sortie synthèse bloc 3 ---
+st.markdown("### Synthèse Bloc 3")
+colS1, colS2, colS3 = st.columns(3)
+with colS1:
+    st.metric("Irradiation annuelle (sur plan)", f"{(annual_kwh_m2 or 0):,.0f} kWh/m²·an")
+with colS2:
+    st.metric("Irradiation annuelle **utile**", f"{(annual_kwh_m2_utile or 0):,.0f} kWh/m²·an")
+with colS3:
+    st.metric("Surface capteur", f"{surface_m2:,.0f} m²")
+
+# Tu auras ensuite : énergie solaire reçue utile ~ annual_kwh_m2_utile * surface_m2 (avant rendement aéraulique/thermique).
+energie_solaire_utile_kwh = (annual_kwh_m2_utile or 0) * surface_m2
+st.caption(f"Énergie solaire utile reçue (avant conversion aéraulique/ΔT) ≈ **{energie_solaire_utile_kwh:,.0f} kWh/an**")
 
 # ==========================
 # SECTION 3 – PERFORMANCE COLLECTEUR (UTC / mur solaire)
 # ==========================
-st.header("3) Performance – Mur solaire (transpiré non vitré)")
+st.header("4) Performance – Mur solaire (transpiré non vitré)")
 colp1, colp2, colp3 = st.columns(3)
 with colp1:
     eta0 = st.number_input("Rendement nominal η₀ (fraction)", value=0.65, min_value=0.1, max_value=0.9, step=0.01)
@@ -618,6 +744,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
