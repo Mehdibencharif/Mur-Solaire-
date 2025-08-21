@@ -1,18 +1,162 @@
+# =========================================================
+# IMPORTS & CONFIG
+# =========================================================
 import os
+import calendar
 import numpy as np
 import pandas as pd
 import pydeck as pdk
+import streamlit as st
 from urllib.parse import quote_plus
 from geopy.geocoders import Nominatim
-import streamlit as st
 
+st.set_page_config(page_title="Mur solaire – Audit Flash", layout="wide")
+st.title("Audit Flash – Mur solaire")
+st.caption("V1.0 – Prototype : localisation + azimut + climat prérempli (type RETScreen).")
 
-# ==========================
-# SECTION 1 – LOCALISATION & ORIENTATION (VISUEL + AZIMUT)
-# ==========================
+# =========================================================
+# SECTION 1 — LOCALISATION & ORIENTATION (AZIMUT + CARTE)
+# =========================================================
+st.header("1) Localisation & Orientation")
 
-st.subheader("Paramètres climatiques")
+# Adresse + liens
+adresse = st.text_input(
+    "Adresse du site (ou point d’intérêt)",
+    value=st.session_state.get("adresse", "Saint-Augustin-de-Desmaures, QC"),
+    help="Ex.: 'Usine ABC, 123 rue X, Ville' ou 'Code postal'."
+)
+st.session_state["adresse"] = adresse
 
+q = quote_plus(adresse.strip()) if adresse.strip() else ""
+lien_maps  = f"https://www.google.com/maps/search/?api=1&query={q}" if q else ""
+lien_earth = f"https://earth.google.com/web/search/{q}" if q else ""
+c1, c2 = st.columns(2)
+with c1:
+    st.markdown(f"🔗 **Google Maps** : [{('Ouvrir dans Maps' if q else '—')}]({lien_maps})" if q else "🔗 **Google Maps** : —")
+with c2:
+    st.markdown(f"🌍 **Google Earth** : [{('Ouvrir dans Earth' if q else '—')}]({lien_earth})" if q else "🌍 **Google Earth** : —")
+
+# Géocodage
+@st.cache_data(show_spinner=False)
+def geocode_addr(addr: str):
+    if not addr or not addr.strip():
+        return None
+    try:
+        geolocator = Nominatim(user_agent="mur_solaire_app")
+        loc = geolocator.geocode(addr, timeout=10)
+        if loc:
+            return float(loc.latitude), float(loc.longitude)
+    except Exception:
+        pass
+    return None
+
+coords = geocode_addr(adresse) if adresse else None
+default_lat, default_lon = 46.813900, -71.208000
+
+colA, colB = st.columns(2)
+with colA:
+    lat = st.number_input(
+        "Latitude",
+        value=float(coords[0]) if coords else float(st.session_state.get("lat", default_lat)),
+        format="%.6f"
+    )
+with colB:
+    lon = st.number_input(
+        "Longitude",
+        value=float(coords[1]) if coords else float(st.session_state.get("lon", default_lon)),
+        format="%.6f"
+    )
+
+st.session_state["lat"] = float(lat)
+st.session_state["lon"] = float(lon)
+
+if not coords and adresse.strip():
+    st.warning("Géocodage indisponible ou infructueux. Coordonnées par défaut affichées — ajuste-les au besoin.")
+
+with st.expander("Comment mesurer/valider l’azimut ?"):
+    st.write(
+        "- L’**azimut** est mesuré **depuis le Nord**, en degrés et **sens horaire**.\n"
+        "- **0°** = Nord, **90°** = Est, **180°** = Sud, **270°** = Ouest.\n"
+        "- ⚠️ Valeur **0–359.99°** (jamais négative)."
+    )
+
+# Orientation & conditions visuelles
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    azimuth = st.number_input(
+        "Azimut du mur (°)", value=float(st.session_state.get("azimuth", 151.22)),
+        min_value=0.0, max_value=359.99, step=0.01,
+        help="0–359.99°, depuis le Nord. 151° ≈ Sud-Sud-Est."
+    )
+with col2:
+    tilt = st.number_input(
+        "Inclinaison (°)", value=float(st.session_state.get("tilt", 90.0)),
+        min_value=0.0, max_value=90.0, step=1.0,
+        help="0° = horizontal (toit), 90° = vertical (façade)."
+    )
+with col3:
+    shading = st.slider(
+        "Ombrage global (%)", min_value=0, max_value=90, value=int(st.session_state.get("shading", 10)), step=1,
+        help="Pertes d’irradiation dues aux obstacles."
+    )
+with col4:
+    wind_ref = st.number_input(
+        "Vent (m/s – indicatif)", value=float(st.session_state.get("wind_ref", 3.0)),
+        min_value=0.0, step=0.5
+    )
+
+st.session_state.update({"azimuth": float(azimuth), "tilt": float(tilt), "shading": int(shading), "wind_ref": float(wind_ref)})
+
+def azimut_cardinal(a):
+    labels = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSO","SO","OSO","O","ONO","NO","NNO"]
+    idx = int((a % 360) / 22.5 + 0.5) % 16
+    return labels[idx]
+
+st.caption(
+    f"🧭 **Azimut** : {azimuth:.2f}° ({azimut_cardinal(azimuth)}) • "
+    f"📐 **Inclinaison** : {tilt:.0f}° • "
+    f"🌫️ **Ombrage** : {shading}% • "
+    f"💨 **Vent** : {wind_ref:.1f} m/s"
+)
+
+# Flèche d’azimut sur carte
+def destination_point(lat_deg, lon_deg, bearing_deg, distance_m=200.0):
+    R = 6371000.0
+    br = np.deg2rad(bearing_deg)
+    lat1 = np.deg2rad(lat_deg); lon1 = np.deg2rad(lon_deg)
+    lat2 = np.arcsin(np.sin(lat1)*np.cos(distance_m/R) + np.cos(lat1)*np.sin(distance_m/R)*np.cos(br))
+    lon2 = lon1 + np.arctan2(np.sin(br)*np.sin(distance_m/R)*np.cos(lat1),
+                             np.cos(lat1)*np.cos(distance_m/R) - np.sin(lat1)*np.sin(lat2))
+    return np.rad2deg(lat2), np.rad2deg(lon2)
+
+end_lat, end_lon = destination_point(lat, lon, azimuth, 200.0)
+
+point_df = pd.DataFrame([{"lat": lat, "lon": lon}])
+line_df = pd.DataFrame([{"lat": lat, "lon": lon}, {"lat": end_lat, "lon": end_lon}])
+
+site_layer = pdk.Layer("ScatterplotLayer", data=point_df, get_position='[lon, lat]', get_radius=6, radius_scale=10, pickable=True)
+arrow_layer = pdk.Layer("PathLayer", data=[{"path": line_df[["lon","lat"]].values.tolist()}], get_width=4, width_min_pixels=2, pickable=False)
+
+view_state = pdk.ViewState(longitude=lon, latitude=lat, zoom=15, pitch=45, bearing=float(azimuth))
+tooltip = {"html": "<b>Site</b><br/>Lat: {lat}<br/>Lon: {lon}", "style": {"color": "white"}}
+mapbox_key = os.getenv("MAPBOX_API_KEY", "")
+
+if mapbox_key:
+    pdk.settings.mapbox_api_key = mapbox_key
+    deck = pdk.Deck(map_provider="mapbox", map_style="mapbox://styles/mapbox/light-v9",
+                    initial_view_state=view_state, layers=[site_layer, arrow_layer], tooltip=tooltip)
+else:
+    deck = pdk.Deck(map_provider="carto", map_style="light",
+                    initial_view_state=view_state, layers=[site_layer, arrow_layer], tooltip=tooltip)
+
+st.pydeck_chart(deck, use_container_width=True)
+
+# =========================================================
+# SECTION 2 — PARAMÈTRES CLIMATIQUES (PRÉREMPLI TYPE RETSCREEN)
+# =========================================================
+st.header("2) Paramètres climatiques")
+
+# En-tête méta
 colh1, colh2, colh3 = st.columns(3)
 with colh1:
     zone_clim = st.selectbox(
@@ -34,12 +178,9 @@ with colt2:
 with colt3:
     vent_ref = st.number_input("Vitesse du vent réf. (m/s)", value=4.0, step=0.1)
 
-# --------------------------
-# PRÉREMPLISSAGE
-# --------------------------
+# Préréglage local embarqué
 DEFAULT_CLIMATE_SADM = {
-    "Mois": ["Janvier","Février","Mars","Avril","Mai","Juin",
-             "Juillet","Août","Septembre","Octobre","Novembre","Décembre"],
+    "Mois": ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"],
     "Temp. air (°C)": [-12.4, -11.0, -4.6, 3.3, 10.8, 16.3, 19.1, 17.2, 12.5, 6.5, 0.5, -9.1],
     "HR (%)": [69.1, 66.8, 66.1, 64.4, 64.0, 68.8, 73.6, 74.1, 75.9, 74.1, 74.1, 75.0],
     "Précip. (mm)": [68.29, 64.52, 79.27, 81.89, 96.29, 119.33, 122.19, 114.88, 102.99, 112.61, 101.26, 92.38],
@@ -49,50 +190,62 @@ DEFAULT_CLIMATE_SADM = {
     "T° sol (°C)": [-14.6, -12.7, -6.7, 2.5, 10.0, 16.8, 19.0, 18.2, 13.0, 5.4, -1.9, -10.3],
 }
 
-import calendar, numpy as np, pandas as pd
-
 def compute_degree_days(df, base_heat=18.0, base_cool=10.0, year=2024):
     days = np.array([calendar.monthrange(year, m)[1] for m in range(1, 13)])
     T = np.asarray(df["Temp. air (°C)"], dtype=float)
-    hdd18 = np.maximum(0.0, base_heat - T) * days
-    cdd10 = np.maximum(0.0, T - base_cool) * days
-    df["DD18 (°C·j)"] = np.round(hdd18, 0)
-    df["DD10 (°C·j)"] = np.round(cdd10, 0)
+    df = df.copy()
+    df["DD18 (°C·j)"] = np.round(np.maximum(0.0, base_heat - T) * days, 0)
+    df["DD10 (°C·j)"] = np.round(np.maximum(0.0, T - base_cool) * days, 0)
     return df
 
 # Choix de source
 source_climat = st.radio(
-    "Source des données :",
-    ["Préréglage local (SADM – valeurs type RETScreen)", "Manuel", "Auto (calcul DD)"],
+    "Source des données climatiques :",
+    ["Préréglage local (SADM – valeurs type RETScreen)", "Manuel", "Auto (recalc DD)"],
     index=0,
+    help="Préréglage → tableau déjà rempli; Manuel → tu saisis; Auto → DD recalculés selon T°."
 )
 
+# État initial
 if "climat_mensuel_df" not in st.session_state:
-    st.session_state["climat_mensuel_df"] = pd.DataFrame(DEFAULT_CLIMATE_SADM)
+    st.session_state["climat_mensuel_df"] = compute_degree_days(pd.DataFrame(DEFAULT_CLIMATE_SADM))
 
+# Construction DataFrame en fonction de la source
 if source_climat == "Préréglage local (SADM – valeurs type RETScreen)":
-    df = pd.DataFrame(DEFAULT_CLIMATE_SADM)
-    clim_df = compute_degree_days(df)
-elif source_climat == "Auto (calcul DD)":
-    df = st.session_state["climat_mensuel_df"].copy()
-    clim_df = compute_degree_days(df)
+    base_df = compute_degree_days(pd.DataFrame(DEFAULT_CLIMATE_SADM))
+elif source_climat == "Auto (recalc DD)":
+    base_df = compute_degree_days(st.session_state["climat_mensuel_df"])
 else:  # Manuel
-    clim_df = st.session_state["climat_mensuel_df"]
+    base_df = st.session_state["climat_mensuel_df"]
 
-# Affichage éditeur (déjà prérempli si préréglage choisi)
+# Bouton reset rapide vers préréglage
+creset, _ = st.columns([1,5])
+with creset:
+    if st.button("↺ Réinitialiser au préréglage SADM"):
+        st.session_state["climat_mensuel_df"] = compute_degree_days(pd.DataFrame(DEFAULT_CLIMATE_SADM))
+        try:
+            st.rerun()
+        except Exception:
+            pass
+
+# Éditeur (prérempli si préréglage)
 clim_df = st.data_editor(
-    clim_df,
+    base_df,
     key="clim_editor",
     num_rows="fixed",
     use_container_width=True,
     hide_index=True,
 )
 
-# Sauvegarde
+# Recalcul live si "Auto"
+if source_climat == "Auto (recalc DD)":
+    clim_df = compute_degree_days(clim_df)
+
+# Sauvegarde état & méta
 st.session_state["climat_mensuel_df"] = clim_df
 st.session_state["climat_meta"] = {
-    "latitude": float(st.session_state.get("lat", 46.813900)),
-    "longitude": float(st.session_state.get("lon", -71.208000)),
+    "latitude": float(st.session_state.get("lat", default_lat)),
+    "longitude": float(st.session_state.get("lon", default_lon)),
     "zone_climatique": zone_clim,
     "elevation_m": elevation_m,
     "t_ext_calc_chauffage_C": t_ext_chauff,
@@ -103,14 +256,17 @@ st.session_state["climat_meta"] = {
 
 with st.expander("Synthèse annuelle"):
     moy_air = clim_df["Temp. air (°C)"].mean(skipna=True)
+    moy_vent = clim_df["Vent (m/s)"].mean(skipna=True) if "Vent (m/s)" in clim_df else np.nan
+    moy_ray = clim_df["Rayon. horiz. (kWh/m²/j)"].mean(skipna=True) if "Rayon. horiz. (kWh/m²/j)" in clim_df else np.nan
     sum_dd18 = clim_df["DD18 (°C·j)"].sum(skipna=True) if "DD18 (°C·j)" in clim_df else np.nan
     sum_dd10 = clim_df["DD10 (°C·j)"].sum(skipna=True) if "DD10 (°C·j)" in clim_df else np.nan
     st.write(
         f"• **T° air moyenne**: {moy_air:.1f} °C | "
+        f"**Vent moyen**: {moy_vent:.1f} m/s | "
+        f"**Rayonnement moyen**: {moy_ray:.2f} kWh/m²/j | "
         f"**DD18 annuels**: {sum_dd18:.0f} °C·j | "
         f"**DD10 annuels**: {sum_dd10:.0f} °C·j"
     )
-
 
 # ==========================
 # SECTION 2 – CLIMAT & ENERGIE SOLAIRE INCIDENTE
@@ -358,6 +514,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
