@@ -260,20 +260,7 @@ st.pydeck_chart(deck, use_container_width=True)
 # SECTION 2 — PARAMÈTRES CLIMATIQUES (PRÉREMPLI TYPE RETSCREEN)
 # =========================================================
 st.header("2) Paramètres climatiques")
-unit_mode = st.radio("Unités", ["Métrique (SI)", "Impériales"], horizontal=True)
-
-# Helpers conversion
-FT2_PER_M2 = 10.7639
-KBTU_PER_KWH = 3.412/1.0
-CFM_PER_LPS = 2.11888
-
-def m2_to_ft2(x): return x * FT2_PER_M2
-def ft2_to_m2(x): return x / FT2_PER_M2
-def kwhm2_to_kbtuft2(x): return x * 0.317097  # 1 kWh/m² ≈ 0.317 kBtu/ft²
-def kbtuft2_to_kwhm2(x): return x / 0.317097
-def lps_to_cfm(x): return x * CFM_PER_LPS
-def cfm_to_lps(x): return x / CFM_PER_LPS
-    
+   
 # En-tête méta
 colh1, colh2, colh3 = st.columns(3)
 with colh1:
@@ -390,6 +377,19 @@ with st.expander("Synthèse annuelle"):
 # SECTION 3 – Systéme de chauffage solaire de l'air 
 # ==========================
 st.header("3) Système de chauffage solaire de l’air")
+unit_mode = st.radio("Unités", ["Métrique (SI)", "Impériales"], horizontal=True)
+
+# Helpers conversion
+FT2_PER_M2 = 10.7639
+KBTU_PER_KWH = 3.412/1.0
+CFM_PER_LPS = 2.11888
+
+def m2_to_ft2(x): return x * FT2_PER_M2
+def ft2_to_m2(x): return x / FT2_PER_M2
+def kwhm2_to_kbtuft2(x): return x * 0.317097  # 1 kWh/m² ≈ 0.317 kBtu/ft²
+def kbtuft2_to_kwhm2(x): return x / 0.317097
+def lps_to_cfm(x): return x * CFM_PER_LPS
+def cfm_to_lps(x): return x / CFM_PER_LPS
 
 # -- Positionnement solaire (RETScreen : Fixe) --
 with st.expander("Évaluation des ressources (positionnement solaire)", expanded=True):
@@ -817,6 +817,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
