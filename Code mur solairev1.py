@@ -1,6 +1,3 @@
-# =========================================================
-# IMPORTS & CONFIG
-# =========================================================
 import os
 import calendar
 import numpy as np
@@ -269,9 +266,9 @@ with st.expander("Synthèse annuelle"):
     )
 
 # ==========================
-# SECTION 2 – CLIMAT & ENERGIE SOLAIRE INCIDENTE
+# SECTION 3 – Systéme de chauffage solaire de l'air 
 # ==========================
-st.header("2) Climat & irradiation sur le plan du mur")
+st.header("2) Systéme de chauffage solaire de l'air ")
 mode_meteo = st.radio("Source d’irradiation (kWh/m²·an ou mensuel)", ["Saisie rapide (annuelle)", "Tableau mensuel (upload RETScreen .csv/.xlsx)"]) 
 
 annual_kwh_m2 = None
@@ -514,6 +511,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
