@@ -462,17 +462,29 @@ else:
 
 # -- Portion d'utilisation par mois (RETScreen : 100% par défaut) --
 with st.expander("Portion d'utilisation par mois (cas proposé) — %", expanded=False):
-    # Table par défaut 12 mois à 100%
+    # Table par défaut 12 mois à 100 %
     mois_labels = ["Jan","Fév","Mar","Avr","Mai","Juin","Juil","Août","Sep","Oct","Nov","Déc"]
     usage_default = pd.DataFrame({"Mois": mois_labels, "Utilisation %": [100]*12})
+
+    # ✅ Config colonne robuste (borne 0–100)
+    col_config = {
+        "Utilisation %": st.column_config.NumberColumn(
+            "Utilisation %", min_value=0, max_value=100, step=1, format="%d"
+        )
+    }
+
+    # ❌ retire num_rows / help (source fréquente de TypeError)
     usage_df = st.data_editor(
         usage_default,
-        num_rows="fixed",
+        hide_index=True,
         use_container_width=True,
-        help="Mettre 0–100% selon la saison d'utilisation réelle."
+        column_config=col_config,
     )
-    # Normalisation bornes
+
+    # Sécurise les entrées utilisateur
+    usage_df["Utilisation %"] = pd.to_numeric(usage_df["Utilisation %"], errors="coerce").fillna(0)
     usage_df["Utilisation %"] = usage_df["Utilisation %"].clip(lower=0, upper=100)
+
 
 # -- Paramètres du capteur (style RETScreen) --
 with st.expander("Paramètres du capteur solaire à air", expanded=True):
@@ -744,6 +756,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
