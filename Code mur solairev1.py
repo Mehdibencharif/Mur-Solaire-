@@ -16,156 +16,6 @@ st.title("Audit Flash – Mur solaire")
 st.caption("V1.0 – Prototype : estimation simple des gains thermiques, coûts, subventions et rentabilité. Basé sur des entrées clés inspirées de RETScreen.")
 
 # ==========================
-# SECTION 1 – LOCALISATION & ORIENTATION (ADRESSE + VISUEL)
-# ==========================
-st.header("1) Localisation & Orientation")
-
-# --- Adresse + liens rapides ---
-adresse = st.text_input(
-    "Adresse du site (ou point d’intérêt)",
-    value="Saint-Augustin-de-Desmaures, QC",
-    help="Ex.: 'Usine ABC, 123 rue X, Ville' ou 'Code postal'."
-)
-q = quote_plus(adresse.strip()) if adresse.strip() else ""
-lien_maps  = f"https://www.google.com/maps/search/?api=1&query={q}" if q else ""
-lien_earth = f"https://earth.google.com/web/search/{q}" if q else ""
-
-c1, c2 = st.columns(2)
-with c1:
-    st.markdown(f"🔗 **Google Maps** : [{('Ouvrir dans Maps' if q else '—')}]({lien_maps})" if q else "🔗 **Google Maps** : —")
-with c2:
-    st.markdown(f"🌍 **Google Earth** : [{('Ouvrir dans Earth' if q else '—')}]({lien_earth})" if q else "🌍 **Google Earth** : —")
-
-# --- Géocodage adresse -> lat/lon (avec repli manuel) ---
-@st.cache_data(show_spinner=False)
-def geocode_addr(addr: str):
-    if not addr.strip():
-        return None
-    try:
-        geolocator = Nominatim(user_agent="mur_solaire_app")
-        loc = geolocator.geocode(addr, timeout=10)
-        if loc:
-            return float(loc.latitude), float(loc.longitude)
-    except Exception:
-        pass
-    return None
-
-coords = geocode_addr(adresse) if adresse else None
-
-colA, colB = st.columns(2)
-with colA:
-    lat = st.number_input("Latitude", value=(coords[0] if coords else 46.813900), format="%.6f")
-with colB:
-    lon = st.number_input("Longitude", value=(coords[1] if coords else -71.208000), format="%.6f")
-
-if not coords and adresse.strip():
-    st.warning("Géocodage indisponible ou infructueux. Coordonnées par défaut affichées — ajuste-les au besoin.")
-
-with st.expander("Comment mesurer/valider l’azimut ?"):
-    st.write(
-        "- L’**azimut** est mesuré **depuis le Nord**, en degrés et **sens horaire**.\n"
-        "- **0°** = Nord, **90°** = Est, **180°** = Sud, **270°** = Ouest.\n"
-        "- ⚠️ La valeur **ne doit jamais être négative** (0–359.99°).\n"
-        "- Astuce : dans Google Maps, utilise l’outil **règle** et compare avec le Nord."
-    )
-
-# --- Orientation & conditions visuelles ---
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    azimuth = st.number_input(
-        "Azimut du mur (°)", value=151.22, min_value=0.0, max_value=359.99, step=0.01,
-        help="0–359.99°, depuis le Nord (sens horaire). Exemple: 151° ≈ Sud-Sud-Est."
-    )
-with col2:
-    tilt = st.number_input(
-        "Inclinaison (°)", value=90.0, min_value=0.0, max_value=90.0, step=1.0,
-        help="0° = horizontal (toit), 90° = vertical (façade)."
-    )
-with col3:
-    shading = st.slider(
-        "Ombrage global (%)", min_value=0, max_value=90, value=10, step=1,
-        help="Pertes d’irradiation dues aux obstacles proches/lointains."
-    )
-with col4:
-    wind_ref = st.number_input(
-        "Vent (m/s – indicatif)", value=3.0, min_value=0.0, step=0.5,
-        help="Valeur indicative pour contexte (non utilisée dans les calculs MVP)."
-    )
-
-# --- Petit utilitaire: azimut -> point cardinal
-def azimut_cardinal(a):
-    labels = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSO","SO","OSO","O","ONO","NO","NNO"]
-    idx = int((a % 360) / 22.5 + 0.5) % 16
-    return labels[idx]
-
-st.caption(
-    f"🧭 **Azimut** : {azimuth:.2f}° ({azimut_cardinal(azimuth)}) • "
-    f"📐 **Inclinaison** : {tilt:.0f}° • "
-    f"🌫️ **Ombrage** : {shading}% • "
-    f"💨 **Vent** : {wind_ref:.1f} m/s"
-)
-
-# --- Carte PyDeck avec flèche d’azimut ---
-def destination_point(lat_deg, lon_deg, bearing_deg, distance_m=200.0):
-    R = 6371000.0
-    br = np.deg2rad(bearing_deg)
-    lat1 = np.deg2rad(lat_deg)
-    lon1 = np.deg2rad(lon_deg)
-    lat2 = np.arcsin(np.sin(lat1)*np.cos(distance_m/R) + np.cos(lat1)*np.sin(distance_m/R)*np.cos(br))
-    lon2 = lon1 + np.arctan2(np.sin(br)*np.sin(distance_m/R)*np.cos(lat1),
-                             np.cos(distance_m/R)-np.sin(lat1)*np.sin(lat2))
-    return np.rad2deg(lat2), np.rad2deg(lon2)
-
-end_lat, end_lon = destination_point(lat, lon, azimuth, 200.0)
-
-point_df = pd.DataFrame([{"lat": lat, "lon": lon}])
-line_df = pd.DataFrame([{"lat": lat, "lon": lon}, {"lat": end_lat, "lon": end_lon}])
-
-site_layer = pdk.Layer(
-    "ScatterplotLayer",
-    data=point_df,
-    get_position='[lon, lat]',
-    get_radius=6,
-    radius_scale=10,
-    pickable=True,
-)
-arrow_layer = pdk.Layer(
-    "PathLayer",
-    data=[{"path": line_df[["lon","lat"]].values.tolist()}],
-    get_width=4,
-    width_min_pixels=2,
-    pickable=False,
-)
-
-view_state = pdk.ViewState(
-    longitude=lon, latitude=lat, zoom=15, pitch=45, bearing=float(azimuth)
-)
-
-# Sélection auto du provider : Mapbox si clé présente, sinon Carto (sans clé)
-tooltip = {"html": "<b>Site</b><br/>Lat: {lat}<br/>Lon: {lon}", "style": {"color": "white"}}
-mapbox_key = os.getenv("MAPBOX_API_KEY", "")
-
-if mapbox_key:
-    pdk.settings.mapbox_api_key = mapbox_key
-    deck = pdk.Deck(
-        map_provider="mapbox",
-        map_style="mapbox://styles/mapbox/light-v9",
-        initial_view_state=view_state,
-        layers=[site_layer, arrow_layer],
-        tooltip=tooltip,
-    )
-else:
-    deck = pdk.Deck(
-        map_provider="carto",
-        map_style="light",
-        initial_view_state=view_state,
-        layers=[site_layer, arrow_layer],
-        tooltip=tooltip,
-    )
-
-st.pydeck_chart(deck)
-
-# ==========================
 # SECTION 1 bis – PARAMÈTRES CLIMATIQUES (style RETScreen)
 # ==========================
 st.subheader("Paramètres climatiques (RETScreen-like)")
@@ -176,7 +26,7 @@ with colh1:
         "Zone climatique",
         options=["1 - Très chaud","2 - Chaud","3 - Tempéré chaud","4 - Tempéré",
                  "5 - Tempéré froid","6 - Froid","7 - Très froid","8 - Arctique"],
-        index=6,  # 7 - Très froid par défaut comme sur ta capture
+        index=6,  # "7 - Très froid" par défaut
         help="Classification indicative pour le dimensionnement."
     )
 with colh2:
@@ -186,37 +36,83 @@ with colh3:
 
 colt1, colt2, colt3 = st.columns(3)
 with colt1:
-    t_ext_chauff = st.number_input("T° ext. de calcul (chauffage) (°C)", value=-23.6, step=0.1,
-                                   help="Température de calcul pour chauffage (RETScreen: colonne correspondante).")
+    t_ext_chauff = st.number_input("T° ext. de calcul (chauffage) (°C)", value=-23.6, step=0.1)
 with colt2:
-    t_ext_clim = st.number_input("T° ext. de calcul (climatisation) (°C)", value=27.3, step=0.1,
-                                 help="Température de calcul pour climatisation.")
+    t_ext_clim = st.number_input("T° ext. de calcul (climatisation) (°C)", value=27.3, step=0.1)
 with colt3:
     vent_ref = st.number_input("Vitesse du vent réf. (m/s)", value=4.0, step=0.1)
 
-# --- Table mensuelle éditable (copie/colle rapide depuis RETScreen si besoin) ---
-import numpy as np
-mois = ["Janvier","Février","Mars","Avril","Mai","Juin",
-        "Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
+# --------------------------
+# PRÉREMPLISSAGE AVANT L'ÉDITEUR
+# --------------------------
+st.markdown("### Source des données climatiques")
 
-colonnes = {
-    "Mois": mois,
-    "Temp. air (°C)": [np.nan]*12,
-    "HR (%)": [np.nan]*12,
-    "Précip. (mm)": [np.nan]*12,
-    "Rayon. horiz. (kWh/m²/j)": [np.nan]*12,
-    "Pression (kPa)": [np.nan]*12,
-    "Vent (m/s)": [np.nan]*12,
-    "T° sol (°C)": [np.nan]*12,
-    "DD18 (°C·j)": [np.nan]*12,  # Degrés-jours de chauffage base 18°C
-    "DD10 (°C·j)": [np.nan]*12,  # Degrés-jours de climatisation base 10°C (si tu les utilises)
+source_climat = st.radio(
+    "Choisir la source :",
+    ["Manuel", "Préréglage local (SADM – valeurs type RETScreen)", "Auto (calcul DD à partir des T°)"],
+    index=1,
+    help="Par défaut: préréglage embarqué. Modifiable ensuite."
+)
+
+# Jeu local embarqué (proche de ta capture)
+DEFAULT_CLIMATE_SADM = {
+    "Mois": ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"],
+    "Temp. air (°C)": [-12.4, -11.0, -4.6, 3.3, 10.8, 16.3, 19.1, 17.2, 12.5, 6.5, 0.5, -9.1],
+    "HR (%)": [69.1, 66.8, 66.1, 64.4, 64.0, 68.8, 73.6, 74.1, 75.9, 74.1, 74.1, 75.0],
+    "Précip. (mm)": [68.29, 64.52, 79.27, 81.89, 96.29, 119.33, 122.19, 114.88, 102.99, 112.61, 101.26, 92.38],
+    "Rayon. horiz. (kWh/m²/j)": [1.62, 2.66, 3.92, 4.92, 5.76, 5.30, 5.65, 4.43, 3.49, 2.61, 1.85, 1.52],
+    "Pression (kPa)": [100.6, 100.6, 100.5, 100.5, 100.6, 100.5, 100.4, 100.5, 100.7, 100.8, 100.7, 100.7],
+    "Vent (m/s)": [4.7, 4.7, 4.7, 4.5, 4.2, 3.6, 3.1, 3.4, 3.3, 3.9, 4.3, 4.5],
+    "T° sol (°C)": [-14.6, -12.7, -6.7, 2.5, 10.0, 16.8, 19.0, 18.2, 13.0, 5.4, -1.9, -10.3],
+    # colonnes DD vides: seront calculées
+    "DD18 (°C·j)": [None]*12,
+    "DD10 (°C·j)": [None]*12,
 }
 
-clim_df = pd.DataFrame(colonnes)
+import calendar
+import numpy as np
+import pandas as pd
 
-st.caption("📝 Renseigne/copie-colle ici les valeurs mensuelles (issues de ta feuille RETScreen).")
+def compute_degree_days(df, base_heat=18.0, base_cool=10.0, year=2024):
+    days = np.array([calendar.monthrange(year, m)[1] for m in range(1, 13)])
+    T = np.asarray(df["Temp. air (°C)"], dtype=float)
+    hdd18 = np.maximum(0.0, base_heat - T) * days
+    cdd10 = np.maximum(0.0, T - base_cool) * days
+    out = df.copy()
+    out["DD18 (°C·j)"] = np.round(hdd18, 0)
+    out["DD10 (°C·j)"] = np.round(cdd10, 0)
+    return out
+
+# 1) Construire le DataFrame initial selon la source
+if "climat_mensuel_df" not in st.session_state:
+    st.session_state["climat_mensuel_df"] = pd.DataFrame(DEFAULT_CLIMATE_SADM)
+
+if source_climat == "Préréglage local (SADM – valeurs type RETScreen)":
+    base_df = pd.DataFrame(DEFAULT_CLIMATE_SADM)
+    base_df = compute_degree_days(base_df)
+elif source_climat == "Auto (calcul DD à partir des T°)":
+    # Part de l'état en session (modifiable), DD recalculés à chaque run
+    base_df = compute_degree_days(st.session_state["climat_mensuel_df"])
+else:  # Manuel
+    # Gabarit vide si tu veux repartir de zéro
+    mois = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
+    base_df = pd.DataFrame({
+        "Mois": mois,
+        "Temp. air (°C)": [np.nan]*12,
+        "HR (%)": [np.nan]*12,
+        "Précip. (mm)": [np.nan]*12,
+        "Rayon. horiz. (kWh/m²/j)": [np.nan]*12,
+        "Pression (kPa)": [np.nan]*12,
+        "Vent (m/s)": [np.nan]*12,
+        "T° sol (°C)": [np.nan]*12,
+        "DD18 (°C·j)": [np.nan]*12,
+        "DD10 (°C·j)": [np.nan]*12,
+    })
+
+# 2) Éditeur (maintenant il s’ouvre déjà prérempli)
 clim_df = st.data_editor(
-    clim_df,
+    base_df,
+    key="clim_editor",
     num_rows="fixed",
     column_config={
         "Temp. air (°C)": st.column_config.NumberColumn(format="%.1f"),
@@ -233,25 +129,13 @@ clim_df = st.data_editor(
     hide_index=True,
 )
 
-# --- Petites synthèses utiles ---
-with st.expander("Synthèse annuelle (rapide)"):
-    # Moyennes pondérées simples (à affiner si tu veux pondérer par jours/mois)
-    moy_air = clim_df["Temp. air (°C)"].mean(skipna=True)
-    moy_vent = clim_df["Vent (m/s)"].mean(skipna=True)
-    moy_ray = clim_df["Rayon. horiz. (kWh/m²/j)"].mean(skipna=True)
-    sum_dd18 = clim_df["DD18 (°C·j)"].sum(skipna=True)
-    sum_dd10 = clim_df["DD10 (°C·j)"].sum(skipna=True)
+# 3) Si la source est "Auto", recalcule DD après édition (live)
+if source_climat == "Auto (calcul DD à partir des T°)":
+    clim_df = compute_degree_days(clim_df)
 
-    st.write(
-        f"• **T° air moyenne**: {moy_air:.1f} °C | "
-        f"**Vent moyen**: {moy_vent:.1f} m/s | "
-        f"**Rayonnement moyen**: {moy_ray:.2f} kWh/m²/j | "
-        f"**DD18 annuels**: {sum_dd18:.0f} °C·j | "
-        f"**DD10 annuels**: {sum_dd10:.0f} °C·j"
-    )
-
-# --- Regroupement dans une structure réutilisable en aval ---
-climat_meta = {
+# 4) Sauvegarde pour persistance
+st.session_state["climat_mensuel_df"] = clim_df
+st.session_state["climat_meta"] = {
     "latitude": float(lat),
     "longitude": float(lon),
     "zone_climatique": zone_clim,
@@ -262,79 +146,12 @@ climat_meta = {
     "vent_ref_ms": vent_ref,
 }
 
-st.session_state["climat_meta"] = climat_meta
-st.session_state["climat_mensuel_df"] = clim_df
-
-st.success("Paramètres climatiques enregistrés pour les calculs ultérieurs.")
-
-# ==========================
-# PRÉREMPLISSAGE CLIMAT (local)
-# ==========================
-st.markdown("### Source des données climatiques")
-
-source_climat = st.radio(
-    "Choisir la source :",
-    ["Manuel", "Préréglage local (SADM – valeurs type RETScreen)", "Auto (calcul DD à partir des T°)"],
-    index=1,
-    help="Tu peux partir d’un préréglage local puis corriger, ou laisser en Manuel."
-)
-
-# --- Jeu de données local embarqué (proche de ta capture d’écran) ---
-DEFAULT_CLIMATE_SADM = {
-    "Mois": ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"],
-    # T° air (moyenne mensuelle) — à ajuster si tu as une source plus précise
-    "Temp. air (°C)": [-12.4, -11.0, -4.6, 3.3, 10.8, 16.3, 19.1, 17.2, 12.5, 6.5, 0.5, -9.1],
-    "HR (%)": [69.1, 66.8, 66.1, 64.4, 64.0, 68.8, 73.6, 74.1, 75.9, 74.1, 74.1, 75.0],
-    "Précip. (mm)": [68.29, 64.52, 79.27, 81.89, 96.29, 119.33, 122.19, 114.88, 102.99, 112.61, 101.26, 92.38],
-    "Rayon. horiz. (kWh/m²/j)": [1.62, 2.66, 3.92, 4.92, 5.76, 5.30, 5.65, 4.43, 3.49, 2.61, 1.85, 1.52],
-    "Pression (kPa)": [100.6, 100.6, 100.5, 100.5, 100.6, 100.5, 100.4, 100.5, 100.7, 100.8, 100.7, 100.7],
-    "Vent (m/s)": [4.7, 4.7, 4.7, 4.5, 4.2, 3.6, 3.1, 3.4, 3.3, 3.9, 4.3, 4.5],
-    "T° sol (°C)": [-14.6, -12.7, -6.7, 2.5, 10.0, 16.8, 19.0, 18.2, 13.0, 5.4, -1.9, -10.3],
-}
-
-# --- Fonction DD à partir de T° moyenne (approx. mensuelle) ---
-import calendar
-import numpy as np
-import pandas as pd
-from datetime import date
-
-def compute_degree_days(df, base_heat=18.0, base_cool=10.0, year=2020):
-    days = np.array([calendar.monthrange(year, m)[1] for m in range(1,13)])
-    T = np.array(df["Temp. air (°C)"], dtype=float)
-    # HDD18 ≈ sum(max(0, base_heat - Tmean) * ndays)
-    hdd18 = np.maximum(0.0, base_heat - T) * days
-    # CDD10 ≈ sum(max(0, Tmean - base_cool) * ndays)
-    cdd10 = np.maximum(0.0, T - base_cool) * days
-    out = df.copy()
-    out["DD18 (°C·j)"] = np.round(hdd18, 0)
-    out["DD10 (°C·j)"] = np.round(cdd10, 0)
-    return out
-
-# --- Appliquer le préréglage si choisi ---
-if source_climat == "Préréglage local (SADM – valeurs type RETScreen)":
-    df_default = pd.DataFrame(DEFAULT_CLIMATE_SADM)
-    clim_df = clim_df.copy()
-    for col in df_default.columns:
-        if col in clim_df.columns:
-            clim_df[col] = df_default[col]
-        else:
-            clim_df[col] = df_default[col]
-    # Calcul DD auto sur la base des T° (cohérent avec RETScreen à ± qques %)
-    clim_df = compute_degree_days(clim_df, base_heat=18.0, base_cool=10.0)
-
-elif source_climat == "Auto (calcul DD à partir des T°)":
-    # Laisse l’utilisateur modifier les T°, on recalcule DD en live
-    clim_df = compute_degree_days(clim_df, base_heat=18.0, base_cool=10.0)
-
-# --- Sauvegarde en session + affichage synthèse mise à jour ---
-st.session_state["climat_mensuel_df"] = clim_df
-
-with st.expander("Synthèse annuelle (après préréglage)"):
+with st.expander("Synthèse annuelle"):
     moy_air = clim_df["Temp. air (°C)"].mean(skipna=True)
     moy_vent = clim_df["Vent (m/s)"].mean(skipna=True)
     moy_ray = clim_df["Rayon. horiz. (kWh/m²/j)"].mean(skipna=True)
-    sum_dd18 = clim_df["DD18 (°C·j)"].sum(skipna=True) if "DD18 (°C·j)" in clim_df else np.nan
-    sum_dd10 = clim_df["DD10 (°C·j)"].sum(skipna=True) if "DD10 (°C·j)" in clim_df else np.nan
+    sum_dd18 = clim_df["DD18 (°C·j)"].sum(skipna=True)
+    sum_dd10 = clim_df["DD10 (°C·j)"].sum(skipna=True)
     st.write(
         f"• **T° air moyenne**: {moy_air:.1f} °C | "
         f"**Vent moyen**: {moy_vent:.1f} m/s | "
@@ -342,6 +159,8 @@ with st.expander("Synthèse annuelle (après préréglage)"):
         f"**DD18 annuels**: {sum_dd18:.0f} °C·j | "
         f"**DD10 annuels**: {sum_dd10:.0f} °C·j"
     )
+
+st.success("Paramètres climatiques préremplis et enregistrés.")
 
 # ==========================
 # SECTION 2 – CLIMAT & ENERGIE SOLAIRE INCIDENTE
@@ -589,6 +408,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
