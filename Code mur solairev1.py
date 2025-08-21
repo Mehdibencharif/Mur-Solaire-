@@ -488,29 +488,41 @@ with st.expander("Portion d'utilisation par mois (cas proposé) — %", expanded
 
 # -- Paramètres du capteur (style RETScreen) --
 with st.expander("Paramètres du capteur solaire à air", expanded=True):
+    TYPES = {
+        "Mur solaire sans vitrage (UTSC)": {
+            "absorptivite": 0.94,   # métal perforé noir
+            "facteur_correctif": 1.00,
+            "comment": "Mur solaire perforé, tirage mécanique. ΔT élevé par temps ensoleillé."
+        },
+        "Capteur à air vitré": {
+            "absorptivite": 0.95,
+            "facteur_correctif": 1.05,
+            "comment": "Caisson vitré + absorbeur. Meilleur en inter-saison, plus de pertes nocturnes."
+        },
+        "Vitré + absorbeur sélectif": {
+            "absorptivite": 0.96,
+            "facteur_correctif": 1.10,
+            "comment": "Absorbeur sélectif, performance améliorée faible éclairement, coût ↑."
+        },
+    }
+
+    type_capteur = st.selectbox("Type de capteur", list(TYPES.keys()), index=0)
+    defaults = TYPES[type_capteur]
+
     colc1, colc2, colc3 = st.columns(3)
     with colc1:
-        type_capteur = st.selectbox("Type", ["Sans vitrage"], index=0, help="Equivalent au champ RETScreen.")
-        objectif = st.selectbox("Objectif de conception", ["Forte hausse de température", "Modérée", "Préchauffage léger"], index=0)
-        couleur = st.selectbox("Couleur du capteur", ["Noir", "Anthracite", "Autre"], index=0)
+        absorptivite = st.number_input("Absorptivité du capteur", 0.80, 0.99, value=float(defaults["absorptivite"]), step=0.01)
+        couleur = st.selectbox("Couleur/finition", ["Noir", "Anthracite", "Autre"], index=0)
     with colc2:
-        absorptivite = st.number_input("Absorptivité du capteur", min_value=0.80, max_value=0.99, value=0.94, step=0.01)
-        facteur_rend = st.number_input("Facteur de rendement", min_value=0.5, max_value=1.2, value=1.0, step=0.01,
-                                       help="Correction performance globale (0.8–1.0 typ.)")
-        surface_m2 = st.number_input("Surface du capteur (m²)", min_value=1.0, value=150.0, step=1.0)
+        facteur_correctif = st.number_input(
+            "Facteur correctif global (adim.)",
+            min_value=0.50, max_value=2.00, value=float(defaults["facteur_correctif"]), step=0.01,
+            help="Facteur multiplicatif pour caler le modèle (ombrage résiduel, pertes/inconnues, gains d’aspiration)."
+        )
     with colc3:
-        ombrage_saison = st.slider("Ombrage sur le capteur – période d'utilisation (%)", 0, 90, 10, step=1)
-        atten_vent = st.slider("Atténuation des vents – saison d'utilisation (%)", 0, 50, 0, step=1,
-                               help="Pertes supplémentaires dues au vent")
-        p_vent_sup_kw = st.number_input("Puissance suppl. de ventilation (kW)", min_value=0.0, value=0.0, step=0.1)
+        surface_m2 = st.number_input("Surface de capteur", min_value=1.0, value=150.0, step=1.0, help="Surface nette exposée (m²).")
 
-    cole1, cole2, cole3 = st.columns(3)
-    with cole1:
-        prix_kwh = st.number_input("Prix de l'électricité ($/kWh)", min_value=0.00, value=0.10, step=0.01)
-    with cole2:
-        capex = st.number_input("Coûts d’investissement ($)", min_value=0.0, value=0.0, step=1000.0)
-    with cole3:
-        opex_savings = st.number_input("Coûts d’exploitation & entretien (économies) ($/an)", min_value=0.0, value=0.0, step=100.0)
+    st.caption(f"ℹ️ {defaults['comment']}")
 
 # -- Application des portions d'utilisation mensuelles sur l'irradiation (si mensuelle fournie) --
 #   On calcule une série "kWh/m² utile" = irradiation * (utilisation%/100) * (1 - ombrage) * (1 - atténuation vent)
@@ -756,6 +768,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
