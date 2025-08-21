@@ -18,7 +18,7 @@ st.caption("V1.0 – Prototype : estimation simple des gains thermiques, coûts,
 # ==========================
 # SECTION 1 – LOCALISATION & ORIENTATION (ADRESSE + VISUEL)
 # ==========================
-st.header("1) Localisation & orientation")
+st.header("1) Localisation & Orientation")
 
 # --- Adresse + liens rapides ---
 adresse = st.text_input(
@@ -165,6 +165,107 @@ else:
 
 st.pydeck_chart(deck)
 
+# ==========================
+# SECTION 1 bis – PARAMÈTRES CLIMATIQUES (style RETScreen)
+# ==========================
+st.subheader("Paramètres climatiques (RETScreen-like)")
+
+colh1, colh2, colh3 = st.columns(3)
+with colh1:
+    zone_clim = st.selectbox(
+        "Zone climatique",
+        options=["1 - Très chaud","2 - Chaud","3 - Tempéré chaud","4 - Tempéré",
+                 "5 - Tempéré froid","6 - Froid","7 - Très froid","8 - Arctique"],
+        index=6,  # 7 - Très froid par défaut comme sur ta capture
+        help="Classification indicative pour le dimensionnement."
+    )
+with colh2:
+    elevation_m = st.number_input("Élévation (m)", value=75.0, step=1.0)
+with colh3:
+    amp_sol = st.number_input("Amplitude des T° du sol (°C)", value=24.2, step=0.1)
+
+colt1, colt2, colt3 = st.columns(3)
+with colt1:
+    t_ext_chauff = st.number_input("T° ext. de calcul (chauffage) (°C)", value=-23.6, step=0.1,
+                                   help="Température de calcul pour chauffage (RETScreen: colonne correspondante).")
+with colt2:
+    t_ext_clim = st.number_input("T° ext. de calcul (climatisation) (°C)", value=27.3, step=0.1,
+                                 help="Température de calcul pour climatisation.")
+with colt3:
+    vent_ref = st.number_input("Vitesse du vent réf. (m/s)", value=4.0, step=0.1)
+
+# --- Table mensuelle éditable (copie/colle rapide depuis RETScreen si besoin) ---
+import numpy as np
+mois = ["Janvier","Février","Mars","Avril","Mai","Juin",
+        "Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
+
+colonnes = {
+    "Mois": mois,
+    "Temp. air (°C)": [np.nan]*12,
+    "HR (%)": [np.nan]*12,
+    "Précip. (mm)": [np.nan]*12,
+    "Rayon. horiz. (kWh/m²/j)": [np.nan]*12,
+    "Pression (kPa)": [np.nan]*12,
+    "Vent (m/s)": [np.nan]*12,
+    "T° sol (°C)": [np.nan]*12,
+    "DD18 (°C·j)": [np.nan]*12,  # Degrés-jours de chauffage base 18°C
+    "DD10 (°C·j)": [np.nan]*12,  # Degrés-jours de climatisation base 10°C (si tu les utilises)
+}
+
+clim_df = pd.DataFrame(colonnes)
+
+st.caption("📝 Renseigne/copie-colle ici les valeurs mensuelles (issues de ta feuille RETScreen).")
+clim_df = st.data_editor(
+    clim_df,
+    num_rows="fixed",
+    column_config={
+        "Temp. air (°C)": st.column_config.NumberColumn(format="%.1f"),
+        "HR (%)": st.column_config.NumberColumn(format="%.1f"),
+        "Précip. (mm)": st.column_config.NumberColumn(format="%.2f"),
+        "Rayon. horiz. (kWh/m²/j)": st.column_config.NumberColumn(format="%.2f"),
+        "Pression (kPa)": st.column_config.NumberColumn(format="%.1f"),
+        "Vent (m/s)": st.column_config.NumberColumn(format="%.1f"),
+        "T° sol (°C)": st.column_config.NumberColumn(format="%.1f"),
+        "DD18 (°C·j)": st.column_config.NumberColumn(format="%.0f"),
+        "DD10 (°C·j)": st.column_config.NumberColumn(format="%.0f"),
+    },
+    use_container_width=True,
+    hide_index=True,
+)
+
+# --- Petites synthèses utiles ---
+with st.expander("Synthèse annuelle (rapide)"):
+    # Moyennes pondérées simples (à affiner si tu veux pondérer par jours/mois)
+    moy_air = clim_df["Temp. air (°C)"].mean(skipna=True)
+    moy_vent = clim_df["Vent (m/s)"].mean(skipna=True)
+    moy_ray = clim_df["Rayon. horiz. (kWh/m²/j)"].mean(skipna=True)
+    sum_dd18 = clim_df["DD18 (°C·j)"].sum(skipna=True)
+    sum_dd10 = clim_df["DD10 (°C·j)"].sum(skipna=True)
+
+    st.write(
+        f"• **T° air moyenne**: {moy_air:.1f} °C | "
+        f"**Vent moyen**: {moy_vent:.1f} m/s | "
+        f"**Rayonnement moyen**: {moy_ray:.2f} kWh/m²/j | "
+        f"**DD18 annuels**: {sum_dd18:.0f} °C·j | "
+        f"**DD10 annuels**: {sum_dd10:.0f} °C·j"
+    )
+
+# --- Regroupement dans une structure réutilisable en aval ---
+climat_meta = {
+    "latitude": float(lat),
+    "longitude": float(lon),
+    "zone_climatique": zone_clim,
+    "elevation_m": elevation_m,
+    "t_ext_calc_chauffage_C": t_ext_chauff,
+    "t_ext_calc_clim_C": t_ext_clim,
+    "amplitude_sol_C": amp_sol,
+    "vent_ref_ms": vent_ref,
+}
+
+st.session_state["climat_meta"] = climat_meta
+st.session_state["climat_mensuel_df"] = clim_df
+
+st.success("Paramètres climatiques enregistrés pour les calculs ultérieurs.")
 
 # ==========================
 # SECTION 2 – CLIMAT & ENERGIE SOLAIRE INCIDENTE
@@ -412,6 +513,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
