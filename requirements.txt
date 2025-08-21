@@ -9,3 +9,5 @@ numpy
 geopy
 pvlib>=0.10
 astral>=2.2
+meteostat
+tzdata
