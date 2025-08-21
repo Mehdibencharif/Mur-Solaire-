@@ -5,6 +5,7 @@ import pandas as pd
 import pydeck as pdk
 import streamlit as st
 import matplotlib.pyplot as plt
+from datetime import date
 from urllib.parse import quote_plus
 from geopy.geocoders import Nominatim
 
@@ -260,8 +261,67 @@ st.pydeck_chart(deck, use_container_width=True)
 # SECTION 2 — PARAMÈTRES CLIMATIQUES (PRÉREMPLI TYPE RETSCREEN)
 # =========================================================
 st.header("2) Paramètres climatiques")
-   
-# En-tête méta
+
+# ---------- 1) Dépendances & helpers ----------
+try:
+    from meteostat import Stations, Normals  # Normales mensuelles 1991–2020
+    _HAS_METEOSTAT = True
+except Exception:
+    _HAS_METEOSTAT = False
+
+MOIS_FR = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
+
+def compute_degree_days(df, base_heat=18.0, base_cool=10.0, year=None):
+    year = year or date.today().year
+    days = np.array([calendar.monthrange(year, m)[1] for m in range(1, 13)])
+    T = np.asarray(df["Temp. air (°C)"], dtype=float)
+    out = df.copy()
+    out["DD18 (°C·j)"] = np.round(np.maximum(0.0, base_heat - T) * days, 0)
+    out["DD10 (°C·j)"] = np.round(np.maximum(0.0, T - base_cool) * days, 0)
+    return out
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def fetch_climate_normals_by_coords(lat: float, lon: float):
+    """Retourne un DF mensuel normalisé (1991–2020) via Meteostat pour (lat,lon).
+       Colonnes: Mois, Temp. air (°C), HR (%), Précip. (mm), Vent (m/s), Pression (kPa).
+       Rayonnement & T° sol non fournis (optionnels, laissés vides si non dispo)."""
+    if not _HAS_METEOSTAT:
+        return None, None  # pas de lib -> pas d’auto
+
+    # Trouver la station la plus proche
+    stns = Stations().nearby(lat, lon).fetch(3)
+    if stns.empty:
+        return None, None
+    stn_id = stns.index[0]
+    stn_meta = stns.iloc[0].to_dict()
+
+    # Normales mensuelles (1991–2020)
+    try:
+        normals = Normals(stn_id, start=1991, end=2020).fetch()
+    except Exception:
+        return None, stn_meta
+
+    # Colonnes possibles: tavg (°C), prcp (mm), pres (hPa), rhum (%), wspd (km/h) selon station
+    df = pd.DataFrame({
+        "Mois": MOIS_FR,
+        "Temp. air (°C)": normals.get("tavg", pd.Series([np.nan]*12)).values,
+        "HR (%)":        normals.get("rhum", pd.Series([np.nan]*12)).values,
+        "Précip. (mm)":  normals.get("prcp", pd.Series([np.nan]*12)).values,
+        "Vent (m/s)":    (normals.get("wspd", pd.Series([np.nan]*12)) / 3.6).values,  # km/h -> m/s
+        "Pression (kPa)":(normals.get("pres", pd.Series([np.nan]*12)) / 10.0).values, # hPa -> kPa
+        # Champs optionnels si tu veux les compléter ailleurs:
+        "Rayon. horiz. (kWh/m²/j)": [np.nan]*12,
+        "T° sol (°C)":              [np.nan]*12,
+    })
+
+    # Degrés-jours
+    df = compute_degree_days(df)
+    return df, stn_meta
+
+# ---------- 2) UI ----------
+st.header("2) Paramètres climatiques")
+
+# En-tête méta (manuels mais on peut les auto-renseigner si on a la donnée)
 colh1, colh2, colh3 = st.columns(3)
 with colh1:
     zone_clim = st.selectbox(
@@ -269,6 +329,7 @@ with colh1:
         options=["1 - Très chaud","2 - Chaud","3 - Tempéré chaud","4 - Tempéré",
                  "5 - Tempéré froid","6 - Froid","7 - Très froid","8 - Arctique"],
         index=6,
+        help="Peut être ajusté automatiquement plus tard à partir des DD18."
     )
 with colh2:
     elevation_m = st.number_input("Élévation (m)", value=75.0, step=1.0)
@@ -283,9 +344,9 @@ with colt2:
 with colt3:
     vent_ref = st.number_input("Vitesse du vent réf. (m/s)", value=4.0, step=0.1)
 
-# Préréglage local embarqué
+# Préréglage local embarqué (saint-augustin-de-desmaures, par ex.)
 DEFAULT_CLIMATE_SADM = {
-    "Mois": ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"],
+    "Mois": MOIS_FR,
     "Temp. air (°C)": [-12.4, -11.0, -4.6, 3.3, 10.8, 16.3, 19.1, 17.2, 12.5, 6.5, 0.5, -9.1],
     "HR (%)": [69.1, 66.8, 66.1, 64.4, 64.0, 68.8, 73.6, 74.1, 75.9, 74.1, 74.1, 75.0],
     "Précip. (mm)": [68.29, 64.52, 79.27, 81.89, 96.29, 119.33, 122.19, 114.88, 102.99, 112.61, 101.26, 92.38],
@@ -294,63 +355,72 @@ DEFAULT_CLIMATE_SADM = {
     "Vent (m/s)": [4.7, 4.7, 4.7, 4.5, 4.2, 3.6, 3.1, 3.4, 3.3, 3.9, 4.3, 4.5],
     "T° sol (°C)": [-14.6, -12.7, -6.7, 2.5, 10.0, 16.8, 19.0, 18.2, 13.0, 5.4, -1.9, -10.3],
 }
+DEFAULT_CLIMATE_SADM = compute_degree_days(pd.DataFrame(DEFAULT_CLIMATE_SADM))
 
-def compute_degree_days(df, base_heat=18.0, base_cool=10.0, year=2024):
-    days = np.array([calendar.monthrange(year, m)[1] for m in range(1, 13)])
-    T = np.asarray(df["Temp. air (°C)"], dtype=float)
-    df = df.copy()
-    df["DD18 (°C·j)"] = np.round(np.maximum(0.0, base_heat - T) * days, 0)
-    df["DD10 (°C·j)"] = np.round(np.maximum(0.0, T - base_cool) * days, 0)
-    return df
-
-# Choix de source
+# Source des données
 source_climat = st.radio(
     "Source des données climatiques :",
-    ["Préréglage local (SADM – valeurs type RETScreen)", "Manuel", "Auto (recalc DD)"],
+    ["Auto (coordonnées → normales)", "Préréglage local (valeurs type)", "Manuel"],
     index=0,
-    help="Préréglage → tableau déjà rempli; Manuel → tu saisis; Auto → DD recalculés selon T°."
+    help="Auto : remplit avec la station la plus proche (Meteostat). Préréglage : tableau figé. Manuel : tu édites."
 )
 
-# État initial
-if "climat_mensuel_df" not in st.session_state:
-    st.session_state["climat_mensuel_df"] = compute_degree_days(pd.DataFrame(DEFAULT_CLIMATE_SADM))
+# ---------- 3) Détection de changement de site ----------
+site_key = f"{round(float(st.session_state.get('lat', 0.0)), 4)},{round(float(st.session_state.get('lon', 0.0)), 4)}"
+if "climate_site_key" not in st.session_state:
+    st.session_state["climate_site_key"] = None
 
-# Construction DataFrame en fonction de la source
-if source_climat == "Préréglage local (SADM – valeurs type RETScreen)":
-    base_df = compute_degree_days(pd.DataFrame(DEFAULT_CLIMATE_SADM))
-elif source_climat == "Auto (recalc DD)":
-    base_df = compute_degree_days(st.session_state["climat_mensuel_df"])
+site_changed = (st.session_state["climate_site_key"] != site_key)
+if site_changed and source_climat.startswith("Auto"):
+    # force un refresh des data auto
+    st.session_state.pop("climat_mensuel_df", None)
+
+# ---------- 4) Construction du DataFrame ----------
+if source_climat.startswith("Auto"):
+    df_auto, stn_meta = fetch_climate_normals_by_coords(
+        float(st.session_state.get("lat", 0.0)),
+        float(st.session_state.get("lon", 0.0))
+    )
+    if df_auto is not None:
+        base_df = df_auto
+        st.session_state["climate_site_key"] = site_key
+        if stn_meta:
+            st.caption(f"📡 Station Meteostat la plus proche : **{stn_meta.get('name','?')}** ({stn_meta.get('country','')})")
+    else:
+        st.warning("Impossible d’obtenir des normales automatiques (lib manquante ou station indisponible). Préréglage utilisé.")
+        base_df = DEFAULT_CLIMATE_SADM.copy()
+
+elif source_climat.startswith("Préréglage"):
+    base_df = DEFAULT_CLIMATE_SADM.copy()
+
 else:  # Manuel
+    if "climat_mensuel_df" not in st.session_state:
+        st.session_state["climat_mensuel_df"] = DEFAULT_CLIMATE_SADM.copy()
     base_df = st.session_state["climat_mensuel_df"]
 
-# Bouton reset rapide vers préréglage
-creset, _ = st.columns([1,5])
-with creset:
-    if st.button("↺ Réinitialiser au préréglage SADM"):
-        st.session_state["climat_mensuel_df"] = compute_degree_days(pd.DataFrame(DEFAULT_CLIMATE_SADM))
-        try:
-            st.rerun()
-        except Exception:
-            pass
-
-# Éditeur (prérempli si préréglage)
+# ---------- 5) Éditeur ----------
+# ! évite num_rows="fixed" (incompatible selon versions)
 clim_df = st.data_editor(
     base_df,
     key="clim_editor",
-    num_rows="fixed",
     use_container_width=True,
     hide_index=True,
 )
 
-# Recalcul live si "Auto"
-if source_climat == "Auto (recalc DD)":
-    clim_df = compute_degree_days(clim_df)
+# Recalcul DD si l’utilisateur a modifié les T°
+if source_climat != "Préréglage local (valeurs type)":
+    try:
+        clim_df = compute_degree_days(clim_df)
+    except Exception:
+        pass
 
-# Sauvegarde état & méta
+# Sauvegarde état
 st.session_state["climat_mensuel_df"] = clim_df
+
+# ---------- 6) Méta & synthèse ----------
 st.session_state["climat_meta"] = {
-    "latitude": float(st.session_state.get("lat", default_lat)),
-    "longitude": float(st.session_state.get("lon", default_lon)),
+    "latitude": float(st.session_state.get("lat", 0.0)),
+    "longitude": float(st.session_state.get("lon", 0.0)),
     "zone_climatique": zone_clim,
     "elevation_m": elevation_m,
     "t_ext_calc_chauffage_C": t_ext_chauff,
@@ -372,7 +442,7 @@ with st.expander("Synthèse annuelle"):
         f"**DD18 annuels**: {sum_dd18:.0f} °C·j | "
         f"**DD10 annuels**: {sum_dd10:.0f} °C·j"
     )
-
+    
 # ==========================
 # SECTION 3 – Systéme de chauffage solaire de l'air 
 # ==========================
@@ -817,6 +887,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
