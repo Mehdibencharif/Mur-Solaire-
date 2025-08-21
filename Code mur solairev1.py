@@ -268,6 +268,82 @@ st.session_state["climat_mensuel_df"] = clim_df
 st.success("Paramètres climatiques enregistrés pour les calculs ultérieurs.")
 
 # ==========================
+# PRÉREMPLISSAGE CLIMAT (local)
+# ==========================
+st.markdown("### Source des données climatiques")
+
+source_climat = st.radio(
+    "Choisir la source :",
+    ["Manuel", "Préréglage local (SADM – valeurs type RETScreen)", "Auto (calcul DD à partir des T°)"],
+    index=1,
+    help="Tu peux partir d’un préréglage local puis corriger, ou laisser en Manuel."
+)
+
+# --- Jeu de données local embarqué (proche de ta capture d’écran) ---
+DEFAULT_CLIMATE_SADM = {
+    "Mois": ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"],
+    # T° air (moyenne mensuelle) — à ajuster si tu as une source plus précise
+    "Temp. air (°C)": [-12.4, -11.0, -4.6, 3.3, 10.8, 16.3, 19.1, 17.2, 12.5, 6.5, 0.5, -9.1],
+    "HR (%)": [69.1, 66.8, 66.1, 64.4, 64.0, 68.8, 73.6, 74.1, 75.9, 74.1, 74.1, 75.0],
+    "Précip. (mm)": [68.29, 64.52, 79.27, 81.89, 96.29, 119.33, 122.19, 114.88, 102.99, 112.61, 101.26, 92.38],
+    "Rayon. horiz. (kWh/m²/j)": [1.62, 2.66, 3.92, 4.92, 5.76, 5.30, 5.65, 4.43, 3.49, 2.61, 1.85, 1.52],
+    "Pression (kPa)": [100.6, 100.6, 100.5, 100.5, 100.6, 100.5, 100.4, 100.5, 100.7, 100.8, 100.7, 100.7],
+    "Vent (m/s)": [4.7, 4.7, 4.7, 4.5, 4.2, 3.6, 3.1, 3.4, 3.3, 3.9, 4.3, 4.5],
+    "T° sol (°C)": [-14.6, -12.7, -6.7, 2.5, 10.0, 16.8, 19.0, 18.2, 13.0, 5.4, -1.9, -10.3],
+}
+
+# --- Fonction DD à partir de T° moyenne (approx. mensuelle) ---
+import calendar
+import numpy as np
+import pandas as pd
+from datetime import date
+
+def compute_degree_days(df, base_heat=18.0, base_cool=10.0, year=2020):
+    days = np.array([calendar.monthrange(year, m)[1] for m in range(1,13)])
+    T = np.array(df["Temp. air (°C)"], dtype=float)
+    # HDD18 ≈ sum(max(0, base_heat - Tmean) * ndays)
+    hdd18 = np.maximum(0.0, base_heat - T) * days
+    # CDD10 ≈ sum(max(0, Tmean - base_cool) * ndays)
+    cdd10 = np.maximum(0.0, T - base_cool) * days
+    out = df.copy()
+    out["DD18 (°C·j)"] = np.round(hdd18, 0)
+    out["DD10 (°C·j)"] = np.round(cdd10, 0)
+    return out
+
+# --- Appliquer le préréglage si choisi ---
+if source_climat == "Préréglage local (SADM – valeurs type RETScreen)":
+    df_default = pd.DataFrame(DEFAULT_CLIMATE_SADM)
+    clim_df = clim_df.copy()
+    for col in df_default.columns:
+        if col in clim_df.columns:
+            clim_df[col] = df_default[col]
+        else:
+            clim_df[col] = df_default[col]
+    # Calcul DD auto sur la base des T° (cohérent avec RETScreen à ± qques %)
+    clim_df = compute_degree_days(clim_df, base_heat=18.0, base_cool=10.0)
+
+elif source_climat == "Auto (calcul DD à partir des T°)":
+    # Laisse l’utilisateur modifier les T°, on recalcule DD en live
+    clim_df = compute_degree_days(clim_df, base_heat=18.0, base_cool=10.0)
+
+# --- Sauvegarde en session + affichage synthèse mise à jour ---
+st.session_state["climat_mensuel_df"] = clim_df
+
+with st.expander("Synthèse annuelle (après préréglage)"):
+    moy_air = clim_df["Temp. air (°C)"].mean(skipna=True)
+    moy_vent = clim_df["Vent (m/s)"].mean(skipna=True)
+    moy_ray = clim_df["Rayon. horiz. (kWh/m²/j)"].mean(skipna=True)
+    sum_dd18 = clim_df["DD18 (°C·j)"].sum(skipna=True) if "DD18 (°C·j)" in clim_df else np.nan
+    sum_dd10 = clim_df["DD10 (°C·j)"].sum(skipna=True) if "DD10 (°C·j)" in clim_df else np.nan
+    st.write(
+        f"• **T° air moyenne**: {moy_air:.1f} °C | "
+        f"**Vent moyen**: {moy_vent:.1f} m/s | "
+        f"**Rayonnement moyen**: {moy_ray:.2f} kWh/m²/j | "
+        f"**DD18 annuels**: {sum_dd18:.0f} °C·j | "
+        f"**DD10 annuels**: {sum_dd10:.0f} °C·j"
+    )
+
+# ==========================
 # SECTION 2 – CLIMAT & ENERGIE SOLAIRE INCIDENTE
 # ==========================
 st.header("2) Climat & irradiation sur le plan du mur")
@@ -513,6 +589,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
