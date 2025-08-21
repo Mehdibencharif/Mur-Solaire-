@@ -76,6 +76,103 @@ with st.expander("Comment mesurer/valider l’azimut ?"):
         "- **0°** = Nord, **90°** = Est, **180°** = Sud, **270°** = Ouest.\n"
         "- ⚠️ Valeur **0–359.99°** (jamais négative)."
     )
+# === BLOC : Azimut solaire automatique (à coller après lat/lon, avant l'input azimut) ===
+import datetime as dt
+
+st.subheader("Calcul automatique de l’azimut solaire")
+
+# Choix du fuseau (par défaut ton TZ)
+try:
+    import pytz
+    tz_default = "America/Toronto"
+    tz = st.selectbox("Fuseau horaire", options=[tz_default, "UTC"], index=0)
+    tzinfo = pytz.timezone(tz)
+except Exception:
+    tzinfo = None
+    tz = "UTC"
+    st.info("pytz non disponible — utilisation UTC.")
+
+# Paramètres temporels
+today_local = dt.datetime.now().date()
+col_d, col_t, col_noon = st.columns([1,1,1])
+with col_d:
+    date_sel = st.date_input("Date", value=today_local, help="Date de calcul de la position solaire.")
+with col_t:
+    time_sel = st.time_input("Heure locale", value=dt.time(12, 0), help="Heure locale pour le calcul.")
+with col_noon:
+    use_solar_noon = st.checkbox("Utiliser le midi solaire (recommandé)", value=True,
+                                 help="Calcule l’azimut à l’instant de hauteur maximale du soleil.")
+
+def compute_solar_noon(lat, lon, date_obj, tzinfo):
+    """Retourne le datetime local du midi solaire (si possible), sinon None."""
+    # 1) Essai avec astral
+    try:
+        from astral.location import Location
+        loc = Location()
+        loc.latitude = lat
+        loc.longitude = lon
+        loc.timezone = tzinfo.zone if tzinfo else "UTC"
+        # astral renvoie le midi solaire local automatiquement
+        noon_dt = loc.solar_noon(date_obj)
+        return noon_dt
+    except Exception:
+        pass
+
+    # 2) Fallback simple : 12:00 locale (approximation)
+    try:
+        naive = dt.datetime.combine(date_obj, dt.time(12, 0))
+        return tzinfo.localize(naive) if tzinfo else naive
+    except Exception:
+        return None
+
+def compute_azimuth_deg(lat, lon, when_dt):
+    """Calcule l’azimut (0–360° depuis le Nord, horaire). Essai pvlib -> astral -> None."""
+    # A) pvlib
+    try:
+        import pandas as pd
+        import pvlib
+        # when_dt doit être timezone-aware
+        if when_dt.tzinfo is None and tzinfo:
+            when_dt = tzinfo.localize(when_dt)
+        times = pd.DatetimeIndex([when_dt])
+        solpos = pvlib.solarposition.get_solarposition(times, lat, lon)
+        az = float(solpos["azimuth"].iloc[0])
+        # pvlib donne déjà l’azimut degrés depuis le Nord (0–360)
+        return az % 360.0
+    except Exception:
+        pass
+
+    # B) astral
+    try:
+        from astral import sun as astral_sun
+        from astral import Observer
+        # astral attend un datetime aware en UTC
+        when_utc = when_dt.astimezone(dt.timezone.utc) if when_dt.tzinfo else when_dt
+        obs = Observer(latitude=lat, longitude=lon)
+        az = float(astral_sun.azimuth(obs, when_utc))
+        # astral retourne un azimut 0–360 par défaut
+        return az % 360.0
+    except Exception:
+        pass
+
+    return None
+
+# Détermination du datetime de calcul
+if use_solar_noon:
+    when_local = compute_solar_noon(lat, lon, date_sel, tzinfo)
+else:
+    naive = dt.datetime.combine(date_sel, time_sel)
+    when_local = tzinfo.localize(naive) if (tzinfo and naive.tzinfo is None) else naive
+
+auto_azimuth = compute_azimuth_deg(lat, lon, when_local) if when_local else None
+
+# Affichage & intégration avec ton champ d’azimut
+if auto_azimuth is not None:
+    st.success(f"Azimut solaire auto : {auto_azimuth:.2f}° (à {when_local.strftime('%Y-%m-%d %H:%M %Z')})")
+    azimuth_default = auto_azimuth
+else:
+    st.warning("Impossible de calculer automatiquement l’azimut (librairies manquantes ?). Valeur par défaut utilisée.")
+    azimuth_default = float(st.session_state.get("azimuth", 151.22))
 
 # Orientation & conditions visuelles
 col1, col2, col3, col4 = st.columns(4)
@@ -511,6 +608,7 @@ else:
 
 st.caption("⚠️ MVP pédagogique : à valider et étalonner avec RETScreen/mesures réelles (rendement, climat, périodes de fonctionnement, pertes spécifiques site).")
 # Calcul
+
 
 
 
