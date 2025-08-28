@@ -869,36 +869,37 @@ try:
     c = canvas.Canvas(pdf_path, pagesize=A4)
     W, H = A4
 
+    # petit helper qui renvoie le nouveau y (pas de nonlocal)
+    def draw_line(cvs, y, txt, size=10, dy=0.6*cm, bold=False):
+        cvs.setFont("Helvetica-Bold" if bold else "Helvetica", size)
+        cvs.drawString(2*cm, y, str(txt))
+        return y - dy
+
     y = H - 2*cm
-    def line(txt, size=10, dy=0.6*cm):
-        nonlocal y
-        c.setFont("Helvetica-Bold" if size>=12 else "Helvetica", size)
-        c.drawString(2*cm, y, str(txt))
-        y -= dy
+    y = draw_line(c, y, "Résumé – Mur solaire", size=14, dy=0.9*cm, bold=True)
+    y = draw_line(c, y, f"Date : {resume_rows['Horodatage']}", size=10)
 
-    line("Résumé – Mur solaire", 14, 0.9*cm)
-    line(f"Date : {resume_rows['Horodatage']}", 10)
+    y = draw_line(c, y, "— Site —", size=12, bold=True)
+    y = draw_line(c, y, f"Adresse : {adresse}")
+    y = draw_line(c, y, f"Coordonnées : {lat:.5f}, {lon:.5f}")
+    y = draw_line(c, y, f"Orientation : azimut {azimuth:.1f}°, inclinaison {tilt:.0f}°")
+    y = draw_line(c, y, f"Ombrage : {shading} %  |  Vent réf. : {wind_ref:.1f} m/s")
 
-    line("— Site —", 12)
-    line(f"Adresse : {adresse}")
-    line(f"Coordonnées : {lat:.5f}, {lon:.5f}")
-    line(f"Orientation : azimut {azimuth:.1f}°, inclinaison {tilt:.0f}°")
-    line(f"Ombrage : {shading} %  |  Vent réf. : {wind_ref:.1f} m/s")
-
-    line("— Capteur & Débit —", 12)
-    line(f"Surface : {surface_ft2:,.0f} pi² (≈ {surface_m2:,.1f} m²)")
-    line(f"Débit : {qv_cfm:,.0f} CFM (≈ {qv_lps:,.0f} L/s)")
-    line(f"Débit surfacique : {eps_cfm_ft2:,.2f} CFM/pi²")
+    y = draw_line(c, y, "— Capteur & Débit —", size=12, bold=True)
+    y = draw_line(c, y, f"Surface : {surface_ft2:,.0f} pi² (≈ {surface_m2:,.1f} m²)")
+    y = draw_line(c, y, f"Débit : {qv_cfm:,.0f} CFM (≈ {qv_lps:,.0f} L/s)")
+    y = draw_line(c, y, f"Débit surfacique : {eps_cfm_ft2:,.2f} CFM/pi²")
 
     if fin:
-        line("— Coûts & Subventions —", 12)
-        line(f"CAPEX (base) : {fin.get('cout_mat_total',0)+fin.get('cout_inst_total',0)+fin.get('monitoring',0):,.0f} $")
-        line(f"Marge : {fin.get('marge',0):,.0f} $  |  CAPEX avant subventions : {fin.get('capex_avant_sub',0):,.0f} $")
-        line(f"Subventions appliquées : {fin.get('sub_appliquee',0):,.0f} $"
-             f"  (≈ {fin.get('sub_pct_effectif',0):.1f} %)")
-        line(f"Investissement net : {fin.get('invest_net',0):,.0f} $")
+        y = draw_line(c, y, "— Coûts & Subventions —", size=12, bold=True)
+        capex_base = fin.get("cout_mat_total",0)+fin.get("cout_inst_total",0)+fin.get("monitoring",0)
+        y = draw_line(c, y, f"CAPEX (base) : {capex_base:,.0f} $")
+        y = draw_line(c, y, f"Marge : {fin.get('marge',0):,.0f} $  |  CAPEX avant subventions : {fin.get('capex_avant_sub',0):,.0f} $")
+        y = draw_line(c, y, f"Subventions appliquées : {fin.get('sub_appliquee',0):,.0f} $  (≈ {fin.get('sub_pct_effectif',0):.1f} %)")
+        y = draw_line(c, y, f"Investissement net : {fin.get('invest_net',0):,.0f} $")
 
-    c.showPage(); c.save()
+    c.showPage()
+    c.save()
 
     with open(pdf_path, "rb") as f:
         pdf_bytes = f.read()
@@ -912,6 +913,7 @@ try:
     )
 except Exception:
     st.info("Export PDF indisponible (bibliothèque **reportlab** manquante). L’export **Excel** reste complet.")
+
 
 
 
