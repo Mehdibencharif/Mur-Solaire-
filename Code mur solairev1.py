@@ -256,22 +256,24 @@ with st.expander("Paramètres du capteur (type, surface, pertes)", expanded=True
     if facteur_correctif > 1.20:
         st.warning("Facteur > 1.20 : vérifie et documente la raison (aspiration, mesures, etc.).")
 
-    # Surface (stockée en m²)
+    # Surface (stockée en m²) — clamp des valeurs par défaut pour éviter StreamlitValueBelowMinError
     surface_m2_state = float(st.session_state.get("surface_m2", 150.0))
     if unit_mode.startswith("Imp"):
+        surface_ft2_default = max(float(m2_to_ft2(surface_m2_state)), 1.0)  # ≥ min
         surface_ft2_in = colc3.number_input(
             "Surface de capteur (pi²)",
-            min_value=10.0,
-            value=float(m2_to_ft2(surface_m2_state)),
-            step=50.0, format="%.0f",                 # grands entiers
+            min_value=1.0,                          # ↓ min tolérant
+            value=surface_ft2_default,              # ↓ valeur clampée
+            step=50.0, format="%.0f",
             help="Surface nette exposée (pi²)."
         )
         surface_m2 = ft2_to_m2(surface_ft2_in)
     else:
+        surface_m2_default = max(surface_m2_state, 0.1)          # ≥ min
         surface_m2 = colc3.number_input(
             "Surface de capteur (m²)",
-            min_value=1.0,
-            value=float(surface_m2_state),
+            min_value=0.1,                         # ↓ min tolérant
+            value=surface_m2_default,              # ↓ valeur clampée
             step=1.0,
             help="Surface nette exposée (m²)."
         )
@@ -314,8 +316,8 @@ with st.expander("Débit d’air & dimensionnement (SRCC 8–10 CFM/pi²)", expa
 
     # Recommandation de surface pour atteindre la cible
     surface_ft2_needed_mid = (qv_cfm / target_mid) if target_mid > 0 else 0.0
-    surface_ft2_needed_lo  = (qv_cfm / target_hi)  if target_hi  > 0 else 0.0  # min pour ne pas dépasser la cible haute
-    surface_ft2_needed_hi  = (qv_cfm / target_lo)  if target_lo  > 0 else 0.0  # max pour rester au-dessus de la cible basse
+    surface_ft2_needed_lo  = (qv_cfm / target_hi)  if target_hi  > 0 else 0.0
+    surface_ft2_needed_hi  = (qv_cfm / target_lo)  if target_lo  > 0 else 0.0
     surface_m2_needed_mid  = ft2_to_m2(surface_ft2_needed_mid)
     surface_m2_needed_lo   = ft2_to_m2(surface_ft2_needed_lo)
     surface_m2_needed_hi   = ft2_to_m2(surface_ft2_needed_hi)
@@ -424,7 +426,6 @@ elif 6.0 <= eps_display <= 12.0:
 else:
     colS3.metric("Débit surfacique", f"{eps_display:,.2f} CFM/pi² 🔴")
 st.caption("🎯 Règle : dimensionner pour rester **8–10 CFM/pi²** (≈ **40–51 L/s·m²**) sur la période d'utilisation.")
-
 
 # ==============================
 # BLOC 3 – Coûts & Économies
@@ -646,6 +647,7 @@ except Exception:
     st.info("📄 Export PDF : installe `fpdf` pour activer (requirements.txt → fpdf).")
 
 st.caption("⚠️ MVP pédagogique : à valider/étalonner avec RETScreen & mesures (rendements, climat, périodes, pertes spécifiques site).")
+
 
 
 
