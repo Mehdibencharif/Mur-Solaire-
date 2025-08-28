@@ -737,103 +737,181 @@ st.session_state["couts_finance"] = {
 }
 
 # ==============================
-# BLOC 4 – Résumé & Export
+# BLOC 5 – Résumé & Export
 # ==============================
-st.header("4) Résumé & Export")
+# =========================================================
+# BLOC 5 — Résumé & Export (Excel + PDF)
+# =========================================================
+st.header("5) Résumé & export")
 
-# 4.1 Tableau de synthèse
-resume = {
-    "Latitude": [lat],
-    "Longitude": [lon],
-    "Azimut_deg": [azimuth],
-    "Inclinaison_deg": [tilt],
-    "Ombrage_%": [shading],
-    "Vent_ref_ms": [vent_ref],
-    "Surface_m2": [area_m2],
-    "Irradiation_kWh_m2_y": [annual_kwh_m2 or 0],
-    "Irradiation_utile_kWh_m2_y": [annual_kwh_m2_utile or 0],
-    "Eta0": [eta0],
-    "Derating_sys_%": [sys_derate],
-    "Part_saison_%": [frac_saison],
-    "Disponibilite_%": [avail],
-    "Q_utile_kWh_y": [q_util_kwh],
-    "E_finale_evitee_kWh_y": [kwh_final_evit],
-    "Econ__$_y": [eco_dollars],
-    "GES_tCO2e_y": [ges_tonnes],
-    "CAPEX_base_$": [capex_base],
-    "Marge_$": [marge],
-    "Subvention_$": [sub_amount],
-    "CAPEX_net_$": [capex_net],
-    "SPB_ans": [spb if math.isfinite(spb) else None],
-    "VAN_savings_$": [npv_savings],
-    "VAN_projet_$": [npv],
+from io import BytesIO
+from datetime import datetime
+
+# --- Conversions & récup état ---
+FT2_PER_M2 = 10.7639
+unit_mode  = st.session_state.get("unit_mode", "Métrique (SI)")
+
+# Site & orientation
+adresse   = st.session_state.get("adresse", "")
+lat       = float(st.session_state.get("lat", 0.0))
+lon       = float(st.session_state.get("lon", 0.0))
+azimuth   = float(st.session_state.get("azimuth", 0.0))
+tilt      = float(st.session_state.get("tilt", 90.0))
+shading   = int(st.session_state.get("shading", 0))
+wind_ref  = float(st.session_state.get("wind_ref", 0.0))
+clim_meta = st.session_state.get("climat_meta", {})
+clim_df   = st.session_state.get("climat_mensuel_df", None)
+
+# Charge (Bloc 2)
+load_params = st.session_state.get("load_params", {})
+usage_mensuel_charge = st.session_state.get("usage_mensuel_charge", None)
+
+# Capteur & dimensionnement (Bloc 3)
+surface_m2  = float(st.session_state.get("surface_m2", 0.0))
+surface_ft2 = surface_m2 * FT2_PER_M2
+qv_cfm      = float(st.session_state.get("qv_cfm", 0.0))
+qv_lps      = float(st.session_state.get("qv_lps", 0.0))
+eps_cfm_ft2 = float(st.session_state.get("eps_cfm_ft2", 0.0))
+eps_lps_m2  = float(st.session_state.get("eps_lps_m2", 0.0))
+
+# Coûts & subventions (Bloc 4)
+fin = st.session_state.get("couts_finance", {})
+
+# =================== APERÇU SYNTHÈSE ===================
+c1, c2, c3 = st.columns(3)
+# Surface
+if unit_mode.startswith("Imp"):
+    c1.metric("Surface capteur", f"{surface_ft2:,.0f} pi²")
+else:
+    c1.metric("Surface capteur", f"{surface_m2:,.1f} m²")
+# Débit total
+if unit_mode.startswith("Imp"):
+    c2.metric("Débit volumique", f"{qv_cfm:,.0f} CFM")
+else:
+    c2.metric("Débit volumique", f"{qv_lps:,.0f} L/s")
+# Débit surfacique
+badge = "✅" if 8.0 <= eps_cfm_ft2 <= 10.0 else ("⚠️" if 6.0 <= eps_cfm_ft2 <= 12.0 else "🔴")
+c3.metric("Débit surfacique", f"{eps_cfm_ft2:,.2f} CFM/pi² {badge}")
+
+# Coûts *si disponibles*
+if fin:
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("CAPEX (base)", f"{fin.get('cout_mat_total',0)+fin.get('cout_inst_total',0)+fin.get('monitoring',0):,.0f} $")
+    k2.metric("Marge", f"{fin.get('marge',0):,.0f} $")
+    k3.metric("Subventions", f"{fin.get('sub_appliquee',0):,.0f} $")
+    k4.metric("Investissement net", f"{fin.get('invest_net',0):,.0f} $")
+
+st.divider()
+
+# =================== EXPORT EXCEL ===================
+st.subheader("Export Excel")
+resume_rows = {
+    "Horodatage": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    "Unités": unit_mode,
+    # Site
+    "Adresse": adresse, "Latitude": lat, "Longitude": lon,
+    "Azimut_deg": azimuth, "Inclinaison_deg": tilt,
+    "Ombrage_%": shading, "Vent_ref_m_s": wind_ref,
+    # Capteur & débit
+    "Surface_m2": surface_m2, "Surface_ft2": surface_ft2,
+    "Qv_CFM": qv_cfm, "Qv_Lps": qv_lps,
+    "EPS_CFM_pi2": eps_cfm_ft2, "EPS_Lps_m2": eps_lps_m2,
+    # Finance (peut être 0)
+    "CAPEX_base_$": (fin.get("cout_mat_total",0)+fin.get("cout_inst_total",0)+fin.get("monitoring",0)),
+    "Marge_$": fin.get("marge",0),
+    "CAPEX_avant_sub_$": fin.get("capex_avant_sub",0),
+    "Subventions_$": fin.get("sub_appliquee",0),
+    "Investissement_net_$": fin.get("invest_net",0),
+    "Subvention_effective_%": fin.get("sub_pct_effectif",0),
 }
 
-df_out = pd.DataFrame(resume)
-st.dataframe(df_out, use_container_width=True)
-
-# 4.2 Export Excel
 out_xlsx = BytesIO()
 with pd.ExcelWriter(out_xlsx, engine="xlsxwriter") as writer:
-    df_out.to_excel(writer, index=False, sheet_name="Résumé")
-    # Optionnel : ajouter les tables sources si dispo
-    try:
-        clim_df.to_excel(writer, index=False, sheet_name="Climat")
-    except Exception:
-        pass
-    try:
-        if monthly_df is not None:
-            monthly_df.to_excel(writer, index=False, sheet_name="Irradiation_mensuelle")
-        if monthly_used is not None:
-            monthly_used.to_excel(writer, index=False, sheet_name="Irradiation_utile")
-    except Exception:
-        pass
+    # Feuille 1 — Résumé
+    pd.DataFrame([resume_rows]).to_excel(writer, index=False, sheet_name="Résumé")
+
+    # Feuille 2 — Site & Climat (métadonnées)
+    if clim_meta:
+        pd.DataFrame([clim_meta]).to_excel(writer, index=False, sheet_name="Site_Climat_meta")
+
+    # Feuille 3 — Climat mensuel
+    if clim_df is not None and isinstance(clim_df, pd.DataFrame):
+        clim_df.to_excel(writer, index=False, sheet_name="Climat_mensuel")
+
+    # Feuille 4 — Charge
+    if load_params:
+        pd.DataFrame([load_params]).to_excel(writer, index=False, sheet_name="Charge")
+
+    # Feuille 5 — Usage mensuel (charge)
+    if usage_mensuel_charge is not None and isinstance(usage_mensuel_charge, pd.DataFrame):
+        usage_mensuel_charge.to_excel(writer, index=False, sheet_name="Usage_mensuel")
+
+    # Feuille 6 — Coûts & finance
+    if fin:
+        pd.DataFrame([fin]).to_excel(writer, index=False, sheet_name="Couts_finance")
 
 st.download_button(
-    "📥 Télécharger le résumé Excel",
+    "📥 Télécharger l’Excel (Résumé complet)",
     data=out_xlsx.getvalue(),
+    file_name="mur_solaire_resume.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    file_name="mur_solaire_audit_flash_resume.xlsx",
+    use_container_width=True
 )
 
-# 4.3 Export PDF (simple)
+# =================== EXPORT PDF (simple) ===================
+st.subheader("Export PDF (synthèse)")
 try:
-    from fpdf import FPDF
-    out_pdf = BytesIO()
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    pdf.cell(0, 10, txt="Mur solaire – Audit Flash (v1.1)", ln=1)
-    pdf.set_font_size(10)
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import cm
 
-    def line(txt):
-        pdf.multi_cell(0, 6, txt)
+    pdf_path = "/mnt/data/mur_solaire_resume.pdf"
+    c = canvas.Canvas(pdf_path, pagesize=A4)
+    W, H = A4
 
-    line(f"Site : {adresse}")
-    line(f"Coordonnées : lat {lat:.6f}, lon {lon:.6f}")
-    line(f"Orientation : Azimut {azimuth:.2f}° ({azimut_cardinal(azimuth)}), Tilt {tilt:.0f}°")
-    line(f"Surface : {area_m2:,.0f} m²")
-    line(f"Irradiation (plan) : {(annual_kwh_m2 or 0):,.0f} kWh/m²·an")
-    line(f"Irradiation utile : {(annual_kwh_m2_utile or 0):,.0f} kWh/m²·an")
-    line(f"Q utile : {q_util_kwh:,.0f} kWh/an")
-    if eco_dollars > 0:
-        line(f"Énergie finale évitée : {kwh_final_evit:,.0f} kWh/an")
-        line(f"Économies : {eco_dollars:,.0f} $/an | GES évités : {ges_tonnes:,.2f} t CO₂e/an")
-    line(f"CAPEX net : {capex_net:,.0f} $")
-    if math.isfinite(spb):
-        line(f"SPB : {spb:,.1f} ans | VAN projet : {npv:,.0f} $")
+    y = H - 2*cm
+    def line(txt, size=10, dy=0.6*cm):
+        nonlocal y
+        c.setFont("Helvetica-Bold" if size>=12 else "Helvetica", size)
+        c.drawString(2*cm, y, str(txt))
+        y -= dy
 
-    pdf.output(out_pdf)
-    st.download_button("🖨️ Télécharger le PDF (simple)", data=out_pdf.getvalue(), file_name="mur_solaire_audit_flash.pdf", mime="application/pdf")
+    line("Résumé – Mur solaire", 14, 0.9*cm)
+    line(f"Date : {resume_rows['Horodatage']}", 10)
+
+    line("— Site —", 12)
+    line(f"Adresse : {adresse}")
+    line(f"Coordonnées : {lat:.5f}, {lon:.5f}")
+    line(f"Orientation : azimut {azimuth:.1f}°, inclinaison {tilt:.0f}°")
+    line(f"Ombrage : {shading} %  |  Vent réf. : {wind_ref:.1f} m/s")
+
+    line("— Capteur & Débit —", 12)
+    line(f"Surface : {surface_ft2:,.0f} pi² (≈ {surface_m2:,.1f} m²)")
+    line(f"Débit : {qv_cfm:,.0f} CFM (≈ {qv_lps:,.0f} L/s)")
+    line(f"Débit surfacique : {eps_cfm_ft2:,.2f} CFM/pi²")
+
+    if fin:
+        line("— Coûts & Subventions —", 12)
+        line(f"CAPEX (base) : {fin.get('cout_mat_total',0)+fin.get('cout_inst_total',0)+fin.get('monitoring',0):,.0f} $")
+        line(f"Marge : {fin.get('marge',0):,.0f} $  |  CAPEX avant subventions : {fin.get('capex_avant_sub',0):,.0f} $")
+        line(f"Subventions appliquées : {fin.get('sub_appliquee',0):,.0f} $"
+             f"  (≈ {fin.get('sub_pct_effectif',0):.1f} %)")
+        line(f"Investissement net : {fin.get('invest_net',0):,.0f} $")
+
+    c.showPage(); c.save()
+
+    with open(pdf_path, "rb") as f:
+        pdf_bytes = f.read()
+
+    st.download_button(
+        "📄 Télécharger le PDF (synthèse)",
+        data=pdf_bytes,
+        file_name="mur_solaire_resume.pdf",
+        mime="application/pdf",
+        use_container_width=True
+    )
 except Exception:
-    st.info("📄 Export PDF : installe `fpdf` pour activer (requirements.txt → fpdf).")
-
-st.caption("⚠️ MVP pédagogique : à valider/étalonner avec RETScreen & mesures (rendements, climat, périodes, pertes spécifiques site).")
-
-
-
-
-
+    st.info("Export PDF indisponible (bibliothèque **reportlab** manquante). L’export **Excel** reste complet.")
 
 
 
