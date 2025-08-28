@@ -211,6 +211,111 @@ else:
 
 st.pydeck_chart(deck, use_container_width=True)
 
+# =========================================================
+# APERÇU CLIMAT — Auto (Meteostat) ou fallback SADM
+# =========================================================
+st.subheader("Climat du site – aperçu (normales 1991–2020)")
+
+# --- Helpers ---
+MOIS_FR = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
+
+def compute_degree_days(df, base_heat=18.0, base_cool=10.0, year=None):
+    import calendar
+    from datetime import date
+    year = year or date.today().year
+    days = np.array([calendar.monthrange(year, m)[1] for m in range(1, 13)])
+    T = np.asarray(df["Temp. air (°C)"], dtype=float)
+    out = df.copy()
+    out["DD18 (°C·j)"] = np.round(np.maximum(0.0, base_heat - T) * days, 0)
+    out["DD10 (°C·j)"] = np.round(np.maximum(0.0, T - base_cool) * days, 0)
+    return out
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def fetch_climate_normals_by_coords(lat: float, lon: float):
+    """Retourne (df, meta) – normales mensuelles 1991–2020 via Meteostat (si dispo)."""
+    try:
+        from meteostat import Stations, Normals
+    except Exception:
+        return None, None
+
+    stns = Stations().nearby(lat, lon).fetch(3)
+    if stns.empty:
+        return None, None
+    stn_id = stns.index[0]
+    meta = stns.iloc[0].to_dict()
+
+    try:
+        normals = Normals(stn_id, start=1991, end=2020).fetch()
+    except Exception:
+        return None, meta
+
+    df = pd.DataFrame({
+        "Mois": MOIS_FR,
+        "Temp. air (°C)": normals.get("tavg", pd.Series([np.nan]*12)).values,
+        "HR (%)":        normals.get("rhum", pd.Series([np.nan]*12)).values,
+        "Précip. (mm)":  normals.get("prcp", pd.Series([np.nan]*12)).values,
+        "Vent (m/s)":    (normals.get("wspd", pd.Series([np.nan]*12)) / 3.6).values,  # km/h -> m/s
+        "Pression (kPa)":(normals.get("pres", pd.Series([np.nan]*12)) / 10.0).values  # hPa -> kPa
+    })
+    df = compute_degree_days(df)
+    return df, meta
+
+# Fallback SADM (valeurs type, 12 mois)
+DEFAULT_CLIMATE_SADM = {
+    "Mois": MOIS_FR,
+    "Temp. air (°C)": [-12.4, -11.0, -4.6, 3.3, 10.8, 16.3, 19.1, 17.2, 12.5, 6.5, 0.5, -9.1],
+    "HR (%)": [69.1, 66.8, 66.1, 64.4, 64.0, 68.8, 73.6, 74.1, 75.9, 74.1, 74.1, 75.0],
+    "Précip. (mm)": [68.29, 64.52, 79.27, 81.89, 96.29, 119.33, 122.19, 114.88, 102.99, 112.61, 101.26, 92.38],
+    "Pression (kPa)": [100.6, 100.6, 100.5, 100.5, 100.6, 100.5, 100.4, 100.5, 100.7, 100.8, 100.7, 100.7],
+    "Vent (m/s)": [4.7, 4.7, 4.7, 4.5, 4.2, 3.6, 3.1, 3.4, 3.3, 3.9, 4.3, 4.5],
+}
+DEFAULT_CLIMATE_SADM = compute_degree_days(pd.DataFrame(DEFAULT_CLIMATE_SADM))
+
+# Sélecteur source
+source_climat = st.radio(
+    "Source des données climatiques",
+    ["Auto (station la plus proche)", "Préréglage SADM"],
+    index=0, horizontal=True
+)
+
+# Récupération
+df_clim, meta = (None, None)
+if source_climat.startswith("Auto"):
+    df_clim, meta = fetch_climate_normals_by_coords(float(lat), float(lon))
+    if df_clim is None:
+        st.warning("Auto indisponible (librairie ou station). Utilisation du préréglage **SADM**.")
+        df_clim = DEFAULT_CLIMATE_SADM.copy()
+else:
+    df_clim = DEFAULT_CLIMATE_SADM.copy()
+
+# Affichage tableau + synthèse
+st.dataframe(df_clim, use_container_width=True, hide_index=True)
+
+moy_air = float(df_clim["Temp. air (°C)"].mean(skipna=True))
+moy_vent = float(df_clim["Vent (m/s)"].mean(skipna=True)) if "Vent (m/s)" in df_clim else float("nan")
+sum_dd18 = float(df_clim["DD18 (°C·j)"].sum(skipna=True))
+sum_dd10 = float(df_clim["DD10 (°C·j)"].sum(skipna=True))
+
+c1, c2, c3 = st.columns(3)
+c1.metric("T° air moyenne", f"{moy_air:.1f} °C")
+c2.metric("Vent moyen", f"{moy_vent:.1f} m/s")
+c3.metric("DD18 / DD10", f"{sum_dd18:,.0f} / {sum_dd10:,.0f} °C·j")
+
+# Légende station (si auto)
+if meta:
+    nom = meta.get("name", "?"); pays = meta.get("country", "")
+    st.caption(f"📡 Station la plus proche : **{nom}** ({pays}) • normales 1991–2020 (Meteostat).")
+else:
+    st.caption("📘 Préréglage **SADM** (valeurs type) — à valider/affiner avec RETScreen.")
+
+# Stockage pour réutilisation ultérieure
+st.session_state["climat_mensuel_df"] = df_clim
+st.session_state["climat_meta"] = {
+    "latitude": float(lat),
+    "longitude": float(lon),
+    "source": "Auto/Meteostat" if meta else "Préréglage SADM",
+}
+
 # ==============================
 # BLOC 2 – Paramètres du capteur solaire à air
 # ==============================
@@ -647,6 +752,7 @@ except Exception:
     st.info("📄 Export PDF : installe `fpdf` pour activer (requirements.txt → fpdf).")
 
 st.caption("⚠️ MVP pédagogique : à valider/étalonner avec RETScreen & mesures (rendements, climat, périodes, pertes spécifiques site).")
+
 
 
 
