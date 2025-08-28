@@ -118,39 +118,6 @@ st.session_state["lat"], st.session_state["lon"] = float(lat), float(lon)
 if not coords and adresse.strip():
     st.warning("Géocodage indisponible ou infructueux. Coordonnées par défaut affichées — ajuste-les au besoin.")
 
-# ---- 1.3 Azimut du mur ----
-with st.expander("Définir l’azimut du MUR par 2 points (Google Maps/Earth)"):
-    colp1, colp2 = st.columns(2)
-    lat_A = colp1.text_input("Lat A", "")
-    lon_A = colp1.text_input("Lon A", "")
-    lat_B = colp2.text_input("Lat B", "")
-    lon_B = colp2.text_input("Lon B", "")
-
-    def _to_float(x):
-        try:
-            return float(str(x).replace(",", "."))
-        except Exception:
-            return None
-
-    def bearing_from_points(lat1, lon1, lat2, lon2):
-        φ1, φ2 = math.radians(lat1), math.radians(lat2)
-        Δλ = math.radians(lon2 - lon1)
-        y = math.sin(Δλ) * math.cos(φ2)
-        x = math.cos(φ1)*math.sin(φ2) - math.sin(φ1)*math.cos(φ2)*math.cos(Δλ)
-        θ = math.degrees(math.atan2(y, x))
-        return (θ + 360.0) % 360.0
-
-    if all(v.strip() != "" for v in [lat_A, lon_A, lat_B, lon_B]):
-        la, loa, lb, lob = map(_to_float, [lat_A, lon_A, lat_B, lon_B])
-        if None not in (la, loa, lb, lob):
-            az_wall = bearing_from_points(la, loa, lb, lob)
-            st.success(f"Azimut du **mur** = {az_wall:.2f}° (0=N, 90=E, 180=S, 270=O)")
-            if st.button("👍 Utiliser cet azimut pour le mur"):
-                st.session_state["azimuth"] = float(az_wall)
-                st.toast("Azimut du mur mis à jour.")
-        else:
-            st.warning("Coordonnées invalides. Utilise des nombres (ex. 46.8139 et -71.2080).")
-
 # Azimut/tilt/conditions mur
 col1, col2, col3, col4 = st.columns(4)
 azimuth = col1.number_input(
@@ -663,6 +630,7 @@ except Exception:
     st.info("📄 Export PDF : installe `fpdf` pour activer (requirements.txt → fpdf).")
 
 st.caption("⚠️ MVP pédagogique : à valider/étalonner avec RETScreen & mesures (rendements, climat, périodes, pertes spécifiques site).")
+
 
 
 
