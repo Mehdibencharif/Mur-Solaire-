@@ -70,9 +70,6 @@ def compute_degree_days(df, base_heat=18.0, base_cool=10.0, year=None):
 # ==============================
 # BLOC 1 – Localisation, Orientation & Climat
 # ==============================
-# =========================================================
-# BLOC 1 — LOCALISATION & ORIENTATION (version simple RETScreen)
-# =========================================================
 st.header("1) Localisation & Orientation")
 
 # -- Adresse + liens
@@ -219,135 +216,129 @@ st.pydeck_chart(deck, use_container_width=True)
 # ==============================
 st.header("2) Paramètres du capteur solaire à air")
 
-# 2.1 Positionnement (rappel – lecture seule)
-with st.expander("Évaluation des ressources (positionnement)", expanded=True):
-    col_pos1, col_pos2 = st.columns(2)
-    col_pos1.number_input("Inclinaison (°)", value=float(tilt), key="tilt_echo", help="0°=horizontal, 90°=vertical", disabled=True)
-    col_pos2.number_input("Azimut (°)", value=float(azimuth), key="azimuth_echo", help="0°=Nord; 180°=Sud", disabled=True)
-
-# 2.2 Irradiation sur plan du mur (annuelle ou mensuelle importée)
-mode_meteo = st.radio(
-    "Source d’irradiation sur **plan du mur** (kWh/m²·an ou mensuel)",
-    ["Saisie rapide (annuelle)", "Tableau mensuel (upload RETScreen .csv/.xlsx)"]
-)
-
-annual_kwh_m2 = None
-monthly_df = None
-
-if mode_meteo == "Saisie rapide (annuelle)":
-    annual_kwh_m2 = st.number_input(
-        "Irradiation **annuelle** sur plan du mur (kWh/m²·an)",
-        value=350.0, min_value=50.0, max_value=1500.0, step=10.0,
-        help="Valeur sur plan **vertical** avec ton azimut réel. Idéalement issue de RETScreen/mesures."
-    )
-    st.caption("Astuce : au Québec, mur S–SSE typique : ~300–500 kWh/m²·an sur plan vertical.")
-else:
-    up = st.file_uploader("Importer un **mensuel RETScreen** (colonnes Mois, kWh/m² sur plan du mur)", type=["csv", "xlsx"])
-    if up is not None:
-        try:
-            monthly_df = pd.read_csv(up) if up.name.lower().endswith(".csv") else pd.read_excel(up)
-            monthly_df.columns = [str(c).strip().lower() for c in monthly_df.columns]
-            mcol = next((c for c in monthly_df.columns if ("mois" in c) or ("month" in c)), None)
-            vcol = next((c for c in monthly_df.columns if ("kwh" in c) and ("/m²" in c or "m2" in c or "per m2" in c or "per m²" in c)), None)
-            if vcol is None:
-                vcol = next((c for c in monthly_df.columns if "kwh" in c), None)
-            if mcol is None or vcol is None:
-                st.error("Le fichier doit contenir une colonne **Mois** et une colonne d’irradiation **kWh/m²**.")
-            else:
-                dfm = monthly_df[[mcol, vcol]].copy()
-                dfm.columns = ["Mois", "kWh/m²"]
-                # tri si 12 lignes
-                if len(dfm) == 12:
-                    def key_mois(x):
-                        s = str(x).strip().lower()[:3]
-                        ordre_fr = ["jan","fév","fev","mar","avr","mai","jun","jui","aoû","aou","sep","oct","nov","déc","dec"]
-                        if s in ordre_fr:
-                            return ordre_fr.index(s)
-                        ordre_en = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"]
-                        return ordre_en.index(s) if s in ordre_en else 99
-                    dfm["__k"] = dfm["Mois"].apply(key_mois)
-                    dfm = dfm.sort_values("__k").drop(columns="__k").reset_index(drop=True)
-                monthly_df = dfm
-                annual_kwh_m2 = float(monthly_df["kWh/m²"].sum())
-                st.success(f"Irradiation **annuelle** reconstituée : **{annual_kwh_m2:,.0f} kWh/m²·an**")
-                # graphique mensuel
-                fig = plt.figure(figsize=(6,3))
-                plt.bar(monthly_df["Mois"].astype(str), monthly_df["kWh/m²"])
-                plt.ylabel("kWh/m²"); plt.title("Irradiation mensuelle sur le plan du mur")
-                plt.xticks(rotation=45); plt.tight_layout()
-                st.pyplot(fig)
-        except Exception as e:
-            st.error(f"Erreur de lecture : {e}")
-
-# 2.3 Portion d'utilisation mensuelle
-with st.expander("Portion d'utilisation par mois — %", expanded=False):
-    mois_labels = ["Jan","Fév","Mar","Avr","Mai","Juin","Juil","Août","Sep","Oct","Nov","Déc"]
-    usage_default = pd.DataFrame({"Mois": mois_labels, "Utilisation %": [100]*12})
-    col_config = {"Utilisation %": st.column_config.NumberColumn("Utilisation %", min_value=0, max_value=100, step=1, format="%d")}
-    usage_df = st.data_editor(usage_default, hide_index=True, use_container_width=True, column_config=col_config)
-    usage_df["Utilisation %"] = pd.to_numeric(usage_df["Utilisation %"], errors="coerce").fillna(0).clip(0, 100)
-
-# 2.4 Paramètres du capteur
+if 'unit_mode' not in st.session_state:
+    st.session_state['unit_mode'] = "Métrique (SI)"
+    
+# 2.4 Paramètres du capteur  ✅ (surface + débit surfacique avec unités)
 with st.expander("Paramètres du capteur solaire à air", expanded=True):
+    # --- Config types capteurs
     TYPES = {
-        "Mur solaire sans vitrage (UTSC)": {"absorptivite": 0.94, "facteur_correctif": 1.00, "comment": "Mur perforé aspiré (tirage méca). ΔT élevé par beau temps."},
-        "Capteur à air vitré": {"absorptivite": 0.95, "facteur_correctif": 1.05, "comment": "Caisson vitré. Meilleur intersaison; pertes nocturnes ↑."},
-        "Vitré + absorbeur sélectif": {"absorptivite": 0.96, "facteur_correctif": 1.10, "comment": "Absorbeur sélectif; mieux à faible éclairement; coût ↑."},
+        "Mur solaire sans vitrage (UTSC)": {"absorptivite": 0.94, "facteur_correctif": 1.00,
+                                            "comment": "Mur perforé aspiré (tirage méca). ΔT élevé par beau temps."},
+        "Capteur à air vitré":             {"absorptivite": 0.95, "facteur_correctif": 1.05,
+                                            "comment": "Caisson vitré. Meilleur intersaison; pertes nocturnes ↑."},
+        "Vitré + absorbeur sélectif":      {"absorptivite": 0.96, "facteur_correctif": 1.10,
+                                            "comment": "Absorbeur sélectif; mieux à faible éclairement; coût ↑."},
     }
     type_capteur = st.selectbox("Type de capteur", list(TYPES.keys()), index=0)
     defaults = TYPES[type_capteur]
+
+    # --- Unités (on lit l'état global ; SI en interne)
+    unit_mode = st.session_state.get("unit_mode", "Métrique (SI)")
+    FT2_PER_M2   = 10.7639
+    CFM_PER_LPS  = 2.11888          # 1 L/s = 2.11888 CFM
+    LPS_PER_CFM  = 1.0 / CFM_PER_LPS
+    M2_PER_FT2   = 1.0 / FT2_PER_M2
+
+    def m2_to_ft2(x): return x * FT2_PER_M2
+    def ft2_to_m2(x): return x * M2_PER_FT2
+    def lps_to_cfm(x): return x * CFM_PER_LPS
+    def cfm_to_lps(x): return x * LPS_PER_CFM
+
     colc1, colc2, colc3 = st.columns(3)
-    absorptivite = colc1.number_input("Absorptivité du capteur", min_value=0.80, max_value=0.99, value=float(defaults["absorptivite"]), step=0.01)
+    absorptivite = colc1.number_input("Absorptivité du capteur",
+                                      min_value=0.80, max_value=0.99,
+                                      value=float(defaults["absorptivite"]), step=0.01)
     couleur = colc1.selectbox("Couleur/finition", ["Noir", "Anthracite", "Autre"], index=0)
-    facteur_correctif = colc2.number_input("Facteur correctif global (adim.)", min_value=0.50, max_value=2.00, value=float(defaults["facteur_correctif"]), step=0.01, help="Calage global (ombrage résiduel, pertes/inconnues, gains d’aspiration).")
+    facteur_correctif = colc2.number_input("Facteur correctif global (adim.)",
+                                           min_value=0.50, max_value=2.00,
+                                           value=float(defaults["facteur_correctif"]), step=0.01,
+                                           help="Calage global (ombrage résiduel, pertes/inconnues, gains d’aspiration).")
     if facteur_correctif > 1.20:
         st.warning("Facteur > 1.20 : vérifie et documente la raison (aspiration, mesures, etc.).")
-    surface_m2 = colc3.number_input("Surface de capteur (m²)", min_value=1.0, value=150.0, step=1.0, help="Surface nette exposée.")
-    st.session_state["surface_m2"] = surface_m2
 
-    ombrage_saison = st.slider("Ombrage – période d'utilisation (%)", 0, 90, int(st.session_state.get("ombrage_saison", 10)), step=1)
-    st.session_state["ombrage_saison"] = ombrage_saison
-    atten_vent = st.slider("Atténuation des vents – saison d'utilisation (%)", 0, 50, int(st.session_state.get("atten_vent", 0)), step=1, help="Pertes supplémentaires dues au vent.")
-    st.session_state["atten_vent"] = atten_vent
+    # --- Surface (input dynamique selon unités, stockage en m²)
+    surface_m2_state = float(st.session_state.get("surface_m2", 150.0))
+    if unit_mode.startswith("Imp"):
+        surface_ft2_in = colc3.number_input("Surface de capteur (pi²)",
+                                            min_value=10.0, value=float(m2_to_ft2(surface_m2_state)), step=10.0,
+                                            help="Surface nette exposée (pi²).")
+        surface_m2 = ft2_to_m2(surface_ft2_in)
+    else:
+        surface_m2 = colc3.number_input("Surface de capteur (m²)",
+                                        min_value=1.0, value=float(surface_m2_state), step=1.0,
+                                        help="Surface nette exposée (m²).")
+    st.session_state["surface_m2"] = float(surface_m2)
+
+    # --- Ombrage/Vent pendant la saison d'utilisation
+    ombrage_saison = st.slider("Ombrage – période d'utilisation (%)",
+                               0, 90, int(st.session_state.get("ombrage_saison", 10)), step=1)
+    st.session_state["ombrage_saison"] = int(ombrage_saison)
+
+    atten_vent = st.slider("Atténuation des vents – période d'utilisation (%)",
+                           0, 50, int(st.session_state.get("atten_vent", 0)), step=1,
+                           help="Pertes supplémentaires dues au vent.")
+    st.session_state["atten_vent"] = int(atten_vent)
+
     st.caption(f"ℹ️ {defaults['comment']}")
 
-# 2.5 Calcul irradiation utile (pondérée)
-perte_ombrage = max(0.0, 1.0 - ombrage_saison/100.0)
-perte_vent    = max(0.0, 1.0 - atten_vent/100.0)
-facteur_pertes = perte_ombrage * perte_vent
+# -------- 2.4 bis — Débit d'air surfacique & recommandation SRCC --------
+with st.expander("Débit d’air surfacique (dimensionnement)", expanded=True):
+    # Saisie du débit volumique TOTAL au ventilateur (on calcule le surfacique)
+    if unit_mode.startswith("Imp"):
+        qv_cfm = st.number_input("Débit volumique total (CFM)", min_value=0.0, value=0.0, step=50.0)
+        qv_lps = cfm_to_lps(qv_cfm)
+    else:
+        qv_lps = st.number_input("Débit volumique total (L/s)", min_value=0.0, value=0.0, step=10.0)
+        qv_cfm = lps_to_cfm(qv_lps)
 
-monthly_used = None
-if (monthly_df is not None) and ("kWh/m²" in monthly_df.columns):
-    def _normalize_mois(x: str) -> str:
-        s = str(x).strip().lower()[:3]
-        mapping = {"jan":"Jan","fév":"Fév","fev":"Fév","mar":"Mar","avr":"Avr","mai":"Mai","jun":"Juin","jui":"Juil","aoû":"Août","aou":"Août","sep":"Sep","oct":"Oct","nov":"Nov","déc":"Déc","dec":"Déc","feb":"Fév","apr":"Avr","may":"Mai","jul":"Juil","aug":"Août"}
-        return mapping.get(s, s.title())
-    mdf = monthly_df.copy(); mdf["Mois"] = mdf["Mois"].apply(_normalize_mois)
-    tmp = pd.merge(mdf, usage_df, on="Mois", how="left")
-    tmp["Utilisation %"] = pd.to_numeric(tmp["Utilisation %"], errors="coerce").fillna(100).clip(0, 100)
-    tmp["kWh/m² utile"] = tmp["kWh/m²"] * (tmp["Utilisation %"]/100.0) * facteur_pertes
-    monthly_used = tmp[["Mois","kWh/m²","Utilisation %","kWh/m² utile"]]
-    fig2 = plt.figure(figsize=(6,3))
-    plt.bar(monthly_used["Mois"], monthly_used["kWh/m² utile"])
-    plt.ylabel("kWh/m² utile"); plt.title("Irradiation utile (pondérée)")
-    plt.xticks(rotation=45); plt.tight_layout(); st.pyplot(fig2)
+    # Débits surfaciques en 2 unités
+    surface_ft2 = m2_to_ft2(surface_m2)
+    eps_cfm_ft2 = (qv_cfm / max(surface_ft2, 1e-9))         # CFM/pi²
+    eps_lps_m2  = (qv_lps / max(surface_m2, 1e-9))          # L/s·m²
 
-if monthly_used is not None:
-    annual_kwh_m2_utile = float(monthly_used["kWh/m² utile"].sum())
-elif annual_kwh_m2 is not None:
-    annual_kwh_m2_utile = float(annual_kwh_m2) * facteur_pertes
-else:
-    annual_kwh_m2_utile = None
+    # Plage cible (d'après le graphe SRCC fourni)
+    target_lo_cfmft2, target_hi_cfmft2 = 8.0, 10.0
+    target_lo_lpsm2 = target_lo_cfmft2 * LPS_PER_CFM / M2_PER_FT2   # ≈ 40.6
+    target_hi_lpsm2 = target_hi_cfmft2 * LPS_PER_CFM / M2_PER_FT2   # ≈ 50.8
 
-# 2.6 Synthèse bloc 2
-st.markdown("### Synthèse Bloc 2")
-colS1, colS2, colS3 = st.columns(3)
-colS1.metric("Irradiation annuelle (sur plan)", f"{(annual_kwh_m2 or 0):,.0f} kWh/m²·an")
-colS2.metric("Irradiation annuelle **utile**", f"{(annual_kwh_m2_utile or 0):,.0f} kWh/m²·an")
-colS3.metric("Surface capteur", f"{surface_m2:,.0f} m²")
+    # Feedback utilisateur
+    colm1, colm2 = st.columns(2)
+    colm1.metric("Débit surfacique (CFM/pi²)", f"{eps_cfm_ft2:,.2f}")
+    colm2.metric("Débit surfacique (L/s·m²)", f"{eps_lps_m2:,.1f}")
 
-energie_solaire_utile_kwh = (annual_kwh_m2_utile or 0) * surface_m2
-st.caption(f"Énergie solaire reçue utile (avant rendement aéraulique/thermique) ≈ **{energie_solaire_utile_kwh:,.0f} kWh/an**")
+    if  target_lo_cfmft2 <= eps_cfm_ft2 <= target_hi_cfmft2:
+        st.success(f"✅ Parfait : dans la **zone SRCC** ({target_lo_cfmft2:.0f}–{target_hi_cfmft2:.0f} CFM/pi² • "
+                   f"{target_lo_lpsm2:.0f}–{target_hi_lpsm2:.0f} L/s·m²).")
+    elif 6.0 <= eps_cfm_ft2 <= 12.0:
+        st.warning("⚠️ Acceptable mais pas optimal : vise **8–10 CFM/pi²** en ajustant **surface** et/ou **débit**.")
+    else:
+        st.error("❌ Hors cible : recalibre **surface** et/ou **débit** pour approcher **8–10 CFM/pi²**.")
+
+    # Petit graphe SRCC approché + repère du point calculé
+    try:
+        import matplotlib.pyplot as plt
+        import numpy as np
+        x = np.array([0.0, 0.5, 1, 2, 3, 4, 5, 6, 8, 9, 10])     # CFM/pi²
+        y = np.array([8,  20, 30, 50, 65, 75, 80, 86, 90, 91, 92])  # Efficacité approximative (%)
+        fig = plt.figure(figsize=(6,3))
+        plt.plot(x, y)
+        # Repères : cible 8–10 et point utilisateur
+        plt.axvline(8, linestyle="--")
+        plt.axvline(10, linestyle="--")
+        plt.axvline(max(0, min(eps_cfm_ft2, 12)), linestyle="-")
+        plt.ylim(0, 100)
+        plt.xlabel("Débit d'air surfacique (CFM/pi²)")
+        plt.ylabel("Efficacité (%)")
+        plt.title("Efficacité des capteurs vs Débit d'air surfacique (SRCC – schéma)")
+        plt.tight_layout()
+        st.pyplot(fig)
+    except Exception:
+        st.caption("Graphique indicatif indisponible (matplotlib).")
+
+    st.caption("🎯 Règle de dimensionnement : viser **8–10 CFM/pi²** (≈ **40–51 L/s·m²**). "
+               "Ajuste **surface** et **débit** pour y rester, surtout aux pointes utiles.")
+
 
 # ==============================
 # BLOC 3 – Coûts & Économies
@@ -569,6 +560,7 @@ except Exception:
     st.info("📄 Export PDF : installe `fpdf` pour activer (requirements.txt → fpdf).")
 
 st.caption("⚠️ MVP pédagogique : à valider/étalonner avec RETScreen & mesures (rendements, climat, périodes, pertes spécifiques site).")
+
 
 
 
