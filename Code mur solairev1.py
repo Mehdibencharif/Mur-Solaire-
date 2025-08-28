@@ -244,11 +244,14 @@ with st.expander("Paramètres du capteur (type, surface, pertes)", expanded=True
     defaults = TYPES[type_capteur]
 
     colc1, colc2, colc3 = st.columns(3)
-    absorptivite = colc1.number_input("Absorptivité du capteur", 0.80, 0.99, float(defaults["absorptivite"]), 0.01)
+    absorptivite = colc1.number_input("Absorptivité du capteur",
+                                      min_value=0.80, max_value=0.99,
+                                      value=float(defaults["absorptivite"]), step=0.01)
     couleur = colc1.selectbox("Couleur/finition", ["Noir", "Anthracite", "Autre"], index=0)
 
-    facteur_correctif = colc2.number_input("Facteur correctif global (adim.)", 0.50, 2.00,
-                                           float(defaults["facteur_correctif"]), 0.01,
+    facteur_correctif = colc2.number_input("Facteur correctif global (adim.)",
+                                           min_value=0.50, max_value=2.00,
+                                           value=float(defaults["facteur_correctif"]), step=0.01,
                                            help="Calage global (ombrage résiduel, pertes/inconnues, gains d’aspiration).")
     if facteur_correctif > 1.20:
         st.warning("Facteur > 1.20 : vérifie et documente la raison (aspiration, mesures, etc.).")
@@ -256,12 +259,22 @@ with st.expander("Paramètres du capteur (type, surface, pertes)", expanded=True
     # Surface (stockée en m²)
     surface_m2_state = float(st.session_state.get("surface_m2", 150.0))
     if unit_mode.startswith("Imp"):
-        surface_ft2_in = colc3.number_input("Surface de capteur (pi²)", min_value=10.0,
-                                            value=float(m2_to_ft2(surface_m2_state)), step=10.0)
+        surface_ft2_in = colc3.number_input(
+            "Surface de capteur (pi²)",
+            min_value=10.0,
+            value=float(m2_to_ft2(surface_m2_state)),
+            step=50.0, format="%.0f",                 # grands entiers
+            help="Surface nette exposée (pi²)."
+        )
         surface_m2 = ft2_to_m2(surface_ft2_in)
     else:
-        surface_m2 = colc3.number_input("Surface de capteur (m²)", min_value=1.0,
-                                        value=float(surface_m2_state), step=1.0)
+        surface_m2 = colc3.number_input(
+            "Surface de capteur (m²)",
+            min_value=1.0,
+            value=float(surface_m2_state),
+            step=1.0,
+            help="Surface nette exposée (m²)."
+        )
     st.session_state["surface_m2"] = float(surface_m2)
 
     # Pertes saisonnières
@@ -277,40 +290,40 @@ with st.expander("Paramètres du capteur (type, surface, pertes)", expanded=True
 
 # ——— 2.2 Dimensionnement par débit (vise 8–10 CFM/pi²) ———
 with st.expander("Débit d’air & dimensionnement (SRCC 8–10 CFM/pi²)", expanded=True):
-    # Saisie du débit total
+    # Saisie du débit total (grandes valeurs OK)
     if unit_mode.startswith("Imp"):
-    qv_cfm = st.number_input(
-        "Débit volumique total (CFM)",
-        min_value=0.0, value=float(st.session_state.get("qv_cfm", 10000.0)),
-        step=100.0, format="%.0f"   # ← grands entiers (ex. 60000)
-    )
-    qv_lps = cfm_to_lps(qv_cfm)
-else:
-    qv_lps = st.number_input(
-        "Débit volumique total (L/s)",
-        min_value=0.0, value=float(st.session_state.get("qv_lps", 5000.0)),
-        step=50.0, format="%.0f"    # ← grands entiers (ex. 30000 L/s)
-    )
-    qv_cfm = lps_to_cfm(qv_lps)
+        qv_cfm = st.number_input(
+            "Débit volumique total (CFM)",
+            min_value=0.0, value=float(st.session_state.get("qv_cfm", 10000.0)),
+            step=100.0, format="%.0f"
+        )
+        qv_lps = cfm_to_lps(qv_cfm)
+    else:
+        qv_lps = st.number_input(
+            "Débit volumique total (L/s)",
+            min_value=0.0, value=float(st.session_state.get("qv_lps", 5000.0)),
+            step=50.0, format="%.0f"
+        )
+        qv_cfm = lps_to_cfm(qv_lps)
 
     # Cible configurable (par défaut 8–10 CFM/pi²)
     c1, c2 = st.columns(2)
     target_lo = c1.number_input("Cible basse (CFM/pi²)", 5.0, 20.0, 8.0, 0.5)
     target_hi = c2.number_input("Cible haute (CFM/pi²)", 5.0, 20.0, 10.0, 0.5)
-    target_mid = 0.5*(target_lo + target_hi)
+    target_mid = 0.5 * (target_lo + target_hi)
 
     # Recommandation de surface pour atteindre la cible
     surface_ft2_needed_mid = (qv_cfm / target_mid) if target_mid > 0 else 0.0
-    surface_ft2_needed_lo  = (qv_cfm / target_hi) if target_hi > 0 else 0.0  # surface MIN pour ne pas dépasser la cible haute
-    surface_ft2_needed_hi  = (qv_cfm / target_lo) if target_lo > 0 else 0.0  # surface MAX pour rester au-dessus de la cible basse
+    surface_ft2_needed_lo  = (qv_cfm / target_hi)  if target_hi  > 0 else 0.0  # min pour ne pas dépasser la cible haute
+    surface_ft2_needed_hi  = (qv_cfm / target_lo)  if target_lo  > 0 else 0.0  # max pour rester au-dessus de la cible basse
     surface_m2_needed_mid  = ft2_to_m2(surface_ft2_needed_mid)
     surface_m2_needed_lo   = ft2_to_m2(surface_ft2_needed_lo)
     surface_m2_needed_hi   = ft2_to_m2(surface_ft2_needed_hi)
 
     st.markdown(
         f"**Surface recommandée** pour viser ~{target_mid:.1f} CFM/pi² : "
-        f"{surface_ft2_needed_mid:,.0f} pi² (≈ {surface_m2_needed_mid:,.1f} m²) "
-        f"— plage acceptable : {surface_ft2_needed_lo:,.0f}–{surface_ft2_needed_hi:,.0f} pi² "
+        f"{surface_ft2_needed_mid:,.0f} pi² (≈ {surface_m2_needed_mid:,.1f} m²) — "
+        f"plage acceptable : {surface_ft2_needed_lo:,.0f}–{surface_ft2_needed_hi:,.0f} pi² "
         f"(≈ {surface_m2_needed_lo:,.1f}–{surface_m2_needed_hi:,.1f} m²)."
     )
     if st.button("👉 Appliquer la surface recommandée (valeur médiane)"):
@@ -318,17 +331,16 @@ else:
         surface_m2 = float(surface_m2_needed_mid)
         st.toast("Surface mise à jour selon la cible 8–10 CFM/pi².")
 
-    # Option : déduire largeur/hauteur
+    # Dimensions (option)
     st.markdown("**Dimensions (option)**")
     colD1, colD2, colD3 = st.columns(3)
     mode_dim = colD1.selectbox("Mode", ["Aire seule", "Largeur×Hauteur"], index=0)
     ratio_H_over_W = colD2.number_input("Ratio H/L (si inconnu)", min_value=0.5, max_value=5.0, value=2.0, step=0.1)
-    incr = 0.1 if unit_mode.startswith("Métrique") else 0.5  # pas d’arrondi
+    incr = 0.1 if unit_mode.startswith("Métrique") else 0.5
 
     if mode_dim == "Largeur×Hauteur":
         if unit_mode.startswith("Imp"):
             largeur_ft = colD1.number_input("Largeur (ft)", min_value=1.0, value=10.0, step=incr)
-            # calc hauteur à partir de l'aire
             hauteur_ft = max((m2_to_ft2(surface_m2) / max(largeur_ft, 1e-6)), incr)
             colD3.metric("Hauteur calculée", f"{hauteur_ft:,.1f} ft")
         else:
@@ -336,14 +348,13 @@ else:
             hauteur_m = max((surface_m2 / max(largeur_m, 1e-6)), incr)
             colD3.metric("Hauteur calculée", f"{hauteur_m:,.2f} m")
     else:
-        # Propose largeur/hauteur selon ratio
         if unit_mode.startswith("Imp"):
             aire_ft2 = m2_to_ft2(surface_m2)
-            largeur_ft = (aire_ft2 / ratio_H_over_W)**0.5
+            largeur_ft = (aire_ft2 / ratio_H_over_W) ** 0.5
             hauteur_ft = ratio_H_over_W * largeur_ft
             colD3.metric("Proposition", f"{largeur_ft:,.1f} ft × {hauteur_ft:,.1f} ft")
         else:
-            largeur_m = (surface_m2 / ratio_H_over_W)**0.5
+            largeur_m = (surface_m2 / ratio_H_over_W) ** 0.5
             hauteur_m = ratio_H_over_W * largeur_m
             colD3.metric("Proposition", f"{largeur_m:,.2f} m × {hauteur_m:,.2f} m")
 
@@ -352,30 +363,33 @@ else:
     eps_cfm_ft2 = qv_cfm / max(surface_ft2, 1e-9)
     eps_lps_m2  = qv_lps  / max(surface_m2, 1e-9)
 
-    # Feedback (8–10 CFM/pi²)
+    # Feedback (8–10 CFM/pi²) + efficacité estimée
     colm1, colm2, colm3 = st.columns(3)
     colm1.metric("Débit surfacique", f"{eps_cfm_ft2:,.2f} CFM/pi²")
     colm2.metric("Débit surfacique", f"{eps_lps_m2:,.1f} L/s·m²")
-    # Efficacité estimée via interpolation simple (courbe SRCC indicative)
-    import numpy as np, matplotlib.pyplot as plt
-    x = np.array([0.0, 0.5, 1, 2, 3, 4, 5, 6, 8, 9, 10, 12])    # CFM/pi²
+
+    import numpy as np
+    import matplotlib.pyplot as plt
+    x = np.array([0.0, 0.5, 1, 2, 3, 4, 5, 6, 8, 9, 10, 12])       # CFM/pi²
     y = np.array([8,   18, 28, 48, 63, 74, 80, 86, 90, 91, 92, 93])  # %
     eff_est = float(np.interp(np.clip(eps_cfm_ft2, x.min(), x.max()), x, y))
     colm3.metric("Efficacité estimée", f"{eff_est:,.0f} %")
 
     if target_lo <= eps_cfm_ft2 <= target_hi:
         st.success(f"✅ Dans la **zone SRCC** ({target_lo:.1f}–{target_hi:.1f} CFM/pi²).")
-    elif (target_lo-2) <= eps_cfm_ft2 <= (target_hi+2):
+    elif (target_lo - 2) <= eps_cfm_ft2 <= (target_hi + 2):
         st.warning("🟠 Proche de la zone 8–10 CFM/pi² : ajuste légèrement **surface** et/ou **débit**.")
     else:
         st.error("🔴 Hors cible : recalibre **surface** (ou ventilateur) pour approcher **8–10 CFM/pi²**.")
 
-    # Graphique compact et interactif (point + zone cible)
-    fig = plt.figure(figsize=(5, 2.6))
+    # Graphique compact et fonctionnel
+    fig = plt.figure(figsize=(4.6, 2.2))
     ax = plt.gca()
     ax.plot(x, y)
-    ax.axvspan(target_lo, target_hi, alpha=0.15)    # zone 8–10
-    ax.scatter([min(max(eps_cfm_ft2, x.min()), x.max())], [np.interp(min(max(eps_cfm_ft2, x.min()), x.max()), x, y)])
+    ax.axvspan(target_lo, target_hi, alpha=0.15)      # zone 8–10
+    xpt = min(max(eps_cfm_ft2, x.min()), x.max())
+    ypt = float(np.interp(xpt, x, y))
+    ax.scatter([xpt], [ypt])
     ax.set_ylim(0, 100)
     ax.set_xlabel("Débit d'air surfacique (CFM/pi²)")
     ax.set_ylabel("Efficacité (%)")
@@ -392,8 +406,16 @@ else:
 # ——— 2.3 Synthèse rapide Bloc 2 ———
 st.markdown("### Synthèse Bloc 2")
 colS1, colS2, colS3 = st.columns(3)
-colS1.metric("Surface capteur", f"{(m2_to_ft2(surface_m2) if unit_mode.startswith('Imp') else surface_m2):,.1f} " + ("pi²" if unit_mode.startswith("Imp") else "m²"))
-colS2.metric("Débit volumique", f"{(st.session_state.get('qv_cfm',0.0) if unit_mode.startswith('Imp') else st.session_state.get('qv_lps',0.0)):,.0f} " + ("CFM" if unit_mode.startswith("Imp") else "L/s"))
+colS1.metric(
+    "Surface capteur",
+    f"{(m2_to_ft2(surface_m2) if unit_mode.startswith('Imp') else surface_m2):,.1f} " +
+    ("pi²" if unit_mode.startswith("Imp") else "m²")
+)
+colS2.metric(
+    "Débit volumique",
+    f"{(st.session_state.get('qv_cfm',0.0) if unit_mode.startswith('Imp') else st.session_state.get('qv_lps',0.0)):,.0f} " +
+    ("CFM" if unit_mode.startswith("Imp") else "L/s")
+)
 eps_display = st.session_state.get("eps_cfm_ft2", 0.0)
 if 8.0 <= eps_display <= 10.0:
     colS3.metric("Débit surfacique", f"{eps_display:,.2f} CFM/pi² ✅")
@@ -402,6 +424,7 @@ elif 6.0 <= eps_display <= 12.0:
 else:
     colS3.metric("Débit surfacique", f"{eps_display:,.2f} CFM/pi² 🔴")
 st.caption("🎯 Règle : dimensionner pour rester **8–10 CFM/pi²** (≈ **40–51 L/s·m²**) sur la période d'utilisation.")
+
 
 # ==============================
 # BLOC 3 – Coûts & Économies
@@ -623,6 +646,7 @@ except Exception:
     st.info("📄 Export PDF : installe `fpdf` pour activer (requirements.txt → fpdf).")
 
 st.caption("⚠️ MVP pédagogique : à valider/étalonner avec RETScreen & mesures (rendements, climat, périodes, pertes spécifiques site).")
+
 
 
 
