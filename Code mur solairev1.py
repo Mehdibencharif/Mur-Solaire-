@@ -658,6 +658,95 @@ else:
     colS3.metric("Débit surfacique", f"{eps_display:,.2f} CFM/pi² 🔴")
 st.caption("🎯 Règle : dimensionner pour rester **8–10 CFM/pi²** (≈ **40–51 L/s·m²**) sur la période d'utilisation.")
 
+# =========================
+# SOMMAIRE (style RETScreen)
+# =========================
+st.subheader("Sommaire énergétique – ventilation")
+
+# Récup des entrées utiles
+surface_m2  = float(st.session_state.get("surface_m2", 0.0))
+qv_lps      = float(st.session_state.get("qv_lps", 0.0))
+qv_cfm      = float(st.session_state.get("qv_cfm", 0.0))
+heures_an   = float(st.session_state.get("load_params", {}).get("heures_an", 2000.0))  # Bloc 2
+annual_kwh_m2_utile = locals().get("annual_kwh_m2_utile", None) or float(st.session_state.get("annual_kwh_m2_utile", 0.0))
+
+# 1) Électricité supplémentaire – ventilation
+with st.expander("Électricité supplémentaire – ventilation", expanded=True):
+    mode_fan = st.radio("Méthode de calcul", ["SFP (kW/(m³/s))", "ΔP & η"], horizontal=True, key="fan_method")
+    qv_m3s = qv_lps / 1000.0  # 1 m³/s = 1000 L/s
+
+    if mode_fan.startswith("SFP"):
+        sfp = st.number_input("SFP (kW/(m³/s))", min_value=0.2, max_value=6.0, value=2.5, step=0.1,
+                              help="Puissance spécifique des ventilateurs.")
+        p_fan_kW = sfp * qv_m3s
+    else:
+        deltaP = st.number_input("Perte de charge totale ΔP (Pa)", min_value=0.0, value=300.0, step=10.0)
+        eta_fan = st.number_input("Rendement ventilateur (%)", min_value=10.0, max_value=85.0, value=60.0, step=1.0)/100.0
+        p_fan_kW = (qv_m3s * deltaP) / max(eta_fan, 1e-3) / 1000.0   # P[W] = Q[m³/s]*ΔP[Pa] ⇒ kW
+    elec_kWh = p_fan_kW * heures_an
+    st.metric("Électricité supplémentaire (kWh/an)", f"{elec_kWh:,.0f}")
+
+# 2) Chaleur fournie (à partir de l’irradiation utile du mur)
+with st.expander("Chaleur fournie par le capteur", expanded=True):
+    if annual_kwh_m2_utile and annual_kwh_m2_utile > 0:
+        eta0 = st.number_input("Rendement thermique global η", min_value=0.10, max_value=0.95, value=0.70, step=0.01)
+        derate_pct = st.number_input("Pertes système (derating) %", min_value=0.0, max_value=30.0, value=5.0, step=0.5)
+        part_saison = st.slider("Part de l’irradiation utile en période **chauffage** (%)", 20, 100, 70, 5)
+        dispo = st.slider("Disponibilité système (%)", 70, 100, 95, 1)
+
+        q_fournie_kWh = annual_kwh_m2_utile * surface_m2 * eta0 * (1 - derate_pct/100.0) \
+                        * (part_saison/100.0) * (dispo/100.0)
+        st.metric("Chaleur fournie (kWh/an)", f"{q_fournie_kWh:,.0f}")
+    else:
+        q_fournie_kWh = 0.0
+        st.info("Renseigne l’irradiation **utile** du mur (kWh/m²·an) au-dessus pour calculer la chaleur fournie.")
+
+# 3) Récupération des pertes de chaleur du bâtiment
+with st.expander("Récupération des pertes de chaleur du bâtiment", expanded=False):
+    rec_mode = st.selectbox("Méthode", ["Aucune", "Fraction de la chaleur fournie", "Par paroi (ΔU)"], index=0)
+    if rec_mode == "Fraction de la chaleur fournie":
+        rec_pct = st.slider("Fraction (%)", 0, 30, 0, 1, help="Usuel 0–10 % si pertinent.")
+        recup_kWh = q_fournie_kWh * rec_pct/100.0
+    elif rec_mode == "Par paroi (ΔU)":
+        A_wall = st.number_input("Aire de mur couverte (m²)", min_value=0.0, value=float(surface_m2), step=1.0)
+        U_avant = st.number_input("U mur existant (W/m²·K)", min_value=0.05, value=0.50, step=0.05)
+        U_apres = st.number_input("U après mur solaire (W/m²·K)", min_value=0.01, value=0.35, step=0.05,
+                                  help="Effet « pare-soleil/cavite » approximatif.")
+        dT_moy = st.number_input("ΔT chauffage moyen (K)", min_value=1.0, value=20.0, step=1.0)
+        heures_chauffe = st.number_input("Heures en période de chauffage (h/an)", min_value=0.0, value=float(heures_an), step=50.0)
+        recup_kWh = max(U_avant - U_apres, 0.0) * A_wall * dT_moy * heures_chauffe / 1000.0
+    else:
+        recup_kWh = 0.0
+    st.metric("Récupération de pertes (kWh/an)", f"{recup_kWh:,.0f}")
+
+# 4) Énergie économisée par déstratification
+with st.expander("Énergie économisée par déstratification", expanded=False):
+    destrat_pct = st.slider("Économie (% de la chaleur fournie)", 0, 20, 0, 1,
+                            help="Grand volume industriel : typiquement 0–10 %.")
+    destrat_kWh = q_fournie_kWh * destrat_pct/100.0
+    st.metric("Énergie économisée par déstratification (kWh/an)", f"{destrat_kWh:,.0f}")
+
+# 5) Bilan & persistance
+bilan_net_kWh = q_fournie_kWh + recup_kWh + destrat_kWh - elec_kWh
+
+s1, s2, s3, s4, s5 = st.columns(5)
+s1.metric("Élec ventilos", f"{elec_kWh:,.0f} kWh/an")
+s2.metric("Chaleur fournie", f"{q_fournie_kWh:,.0f} kWh/an")
+s3.metric("Récup. pertes", f"{recup_kWh:,.0f} kWh/an")
+s4.metric("Déstrat.", f"{destrat_kWh:,.0f} kWh/an")
+s5.metric("Bilan **net**", f"{bilan_net_kWh:,.0f} kWh/an")
+
+# Sauvegarde pour export (Bloc 5)
+st.session_state["sommaire_ener"] = {
+    "elec_vent_kWh": float(elec_kWh),
+    "chaleur_fournie_kWh": float(q_fournie_kWh),
+    "recup_pertes_kWh": float(recup_kWh),
+    "destrat_kWh": float(destrat_kWh),
+    "bilan_net_kWh": float(bilan_net_kWh),
+    "heures_an": float(heures_an),
+}
+# (Optionnel) garder la valeur locale pour d'autres blocs
+st.session_state["annual_kwh_m2_utile"] = float(annual_kwh_m2_utile or 0.0)
 
 
 # =========================================================
@@ -736,9 +825,6 @@ st.session_state["couts_finance"] = {
     "invest_net": invest_net, "solde_pct": solde_pct, "sub_pct_effectif": sub_pct_effectif,
 }
 
-# ==============================
-# BLOC 5 – Résumé & Export
-# ==============================
 # =========================================================
 # BLOC 5 — Résumé & Export (Excel + PDF)
 # =========================================================
@@ -913,6 +999,7 @@ try:
     )
 except Exception:
     st.info("Export PDF indisponible (bibliothèque **reportlab** manquante). L’export **Excel** reste complet.")
+
 
 
 
