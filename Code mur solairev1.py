@@ -315,6 +315,132 @@ st.session_state["climat_meta"] = {
     "longitude": float(lon),
     "source": "Auto/Meteostat" if meta else "Préréglage SADM",
 }
+# =========================================================
+# BLOC 2 — Charge & exploitation (style RETScreen)
+# =========================================================
+st.header("2) Charge & exploitation")
+
+unit_mode = st.session_state.get("unit_mode", "Métrique (SI)")
+
+# Conversions
+FT2_PER_M2  = 10.7639
+M2_PER_FT2  = 1.0 / FT2_PER_M2
+CFM_PER_LPS = 2.11888
+LPS_PER_CFM = 1.0 / CFM_PER_LPS
+R_SI_PER_R_US = 0.1761101838   # m²·K/W par (h·ft²·°F/Btu)
+R_US_PER_R_SI = 1.0 / R_SI_PER_R_US
+
+def m2_to_ft2(x): return x * FT2_PER_M2
+def ft2_to_m2(x): return x * M2_PER_FT2
+def lps_to_cfm(x): return x * CFM_PER_LPS
+def cfm_to_lps(x): return x * LPS_PER_LPS
+
+# ---------------- Caractéristiques de la charge ----------------
+with st.expander("Caractéristiques de la charge (réf./proposé)", expanded=True):
+    colA, colB = st.columns(2)
+    type_install = colA.selectbox("Type d'installation", ["Industriel", "Commercial", "Institutionnel", "Autre"], index=0)
+
+    # Températures
+    cT1, cT2, cT3, cT4 = st.columns(4)
+    t_int = cT1.number_input("Température intérieure (°C)", value=float(st.session_state.get("t_int", 20.0)), step=0.5)
+    t_min = cT2.number_input("T° air - minimum (°C)", value=float(st.session_state.get("t_min", -10.0)), step=0.5)
+    t_max = cT3.number_input("T° air - maximum (°C)", value=float(st.session_state.get("t_max", 25.0)), step=0.5)
+    strat = cT4.number_input("Stratification intérieure (°C)", value=float(st.session_state.get("strat", 0.0)), step=0.5)
+
+    # Surface planchers + valeurs R (RSI en SI, R-us en imp)
+    cS1, cS2, cS3 = st.columns(3)
+    if unit_mode.startswith("Imp"):
+        surf_ft2 = cS1.number_input("Surface de planchers (pi²)", min_value=0.0,
+                                    value=float(st.session_state.get("surf_ft2", 20000.0)), step=500.0, format="%.0f")
+        r_roof_us = cS2.number_input("Valeur R - plafond (h·ft²·°F/Btu)", min_value=0.1,
+                                     value=float(st.session_state.get("r_roof_us", 20.0)), step=1.0)
+        r_wall_us = cS3.number_input("Valeur R - mur (h·ft²·°F/Btu)", min_value=0.1,
+                                     value=float(st.session_state.get("r_wall_us", 12.0)), step=1.0)
+        surf_m2 = ft2_to_m2(surf_ft2)
+        r_roof_si = r_roof_us * R_SI_PER_R_US
+        r_wall_si = r_wall_us * R_SI_PER_R_US
+    else:
+        surf_m2 = cS1.number_input("Surface de planchers (m²)", min_value=0.0,
+                                   value=float(st.session_state.get("surf_m2", 1858.0)), step=10.0, format="%.1f")
+        r_roof_si = cS2.number_input("Valeur R - plafond (m²·°C/W)", min_value=0.1,
+                                     value=float(st.session_state.get("r_roof_si", 3.5)), step=0.1)
+        r_wall_si = cS3.number_input("Valeur R - mur (m²·°C/W)", min_value=0.1,
+                                     value=float(st.session_state.get("r_wall_si", 2.1)), step=0.1)
+        surf_ft2 = m2_to_ft2(surf_m2)
+        r_roof_us = r_roof_si * R_US_PER_R_SI
+        r_wall_us = r_wall_si * R_US_PER_R_SI
+
+    # Débit d'air de conception (cohérent avec Bloc 3 si tu l'utilises déjà)
+    if unit_mode.startswith("Imp"):
+        qv_cfm = st.number_input("Débit d'air de conception (CFM)", min_value=0.0,
+                                 value=float(st.session_state.get("qv_cfm", 10000.0)), step=100.0, format="%.0f")
+        qv_lps = qv_cfm / CFM_PER_LPS
+    else:
+        qv_lps = st.number_input("Débit d'air de conception (L/s)", min_value=0.0,
+                                 value=float(st.session_state.get("qv_lps", 5000.0)), step=50.0, format="%.0f")
+        qv_cfm = qv_lps * CFM_PER_LPS
+
+# ---------------- Horaire d’opération ----------------
+with st.expander("Horaire d’opération", expanded=True):
+    cH1, cH2, cH3, cH4 = st.columns(4)
+    j_sem   = cH1.number_input("Jours/sem (semaine)", min_value=0, max_value=7, value=int(st.session_state.get("j_sem", 5)))
+    h_j_sem = cH2.number_input("Heures/jour (semaine)", min_value=0.0, max_value=24.0, value=float(st.session_state.get("h_j_sem", 8.0)), step=0.5)
+    j_wkd   = cH3.number_input("Jours/sem (fins de semaine)", min_value=0, max_value=2, value=int(st.session_state.get("j_wkd", 0)))
+    h_j_wkd = cH4.number_input("Heures/jour (fins de semaine)", min_value=0.0, max_value=24.0, value=float(st.session_state.get("h_j_wkd", 0.0)), step=0.5)
+
+    heures_sem = j_sem * h_j_sem + j_wkd * h_j_wkd
+    st.caption(f"⏱️ **Heures d'opération / semaine** : **{heures_sem:.1f} h/sem** (≈ {heures_sem*52:.0f} h/an)")
+
+# ---------------- Portion d'utilisation mensuelle + Rayonnement ----------------
+with st.expander("Portion d’utilisation mensuelle & rayonnement", expanded=True):
+    # Table d’usage (réf/proposé)
+    mois_labels = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
+    usage_df = pd.DataFrame({
+        "Mois": mois_labels,
+        "Utilisation % (réf.)":    [100]*12,
+        "Utilisation % (proposé)": [100]*12,
+    })
+    col_cfg = {
+        "Utilisation % (réf.)": st.column_config.NumberColumn(min_value=0, max_value=100, step=1, format="%d"),
+        "Utilisation % (proposé)": st.column_config.NumberColumn(min_value=0, max_value=100, step=1, format="%d"),
+    }
+    usage_df = st.data_editor(usage_df, hide_index=True, use_container_width=True, column_config=col_cfg)
+    for c in ["Utilisation % (réf.)","Utilisation % (proposé)"]:
+        usage_df[c] = pd.to_numeric(usage_df[c], errors="coerce").fillna(0).clip(0, 100)
+
+    # Rayonnement quotidien (kWh/m²/j) — depuis le climat du Bloc 1 s'il existe
+    clim_df = st.session_state.get("climat_mensuel_df", None)
+    if (clim_df is not None) and ("Rayon. horiz. (kWh/m²/j)" in clim_df.columns):
+        df_ray = pd.DataFrame({"Mois": mois_labels})
+        df_ray["Rayonnement quotidien - horizontal (kWh/m²/j)"] = np.asarray(clim_df["Rayon. horiz. (kWh/m²/j)"], dtype=float)
+
+        # Incliné (si tu n'as pas mieux ici, on duplique à titre d'aperçu ; le vrai “sur plan du mur” sera en Bloc 3)
+        df_ray["Rayonnement quotidien - incliné (kWh/m²/j)"] = df_ray["Rayonnement quotidien - horizontal (kWh/m²/j)"]
+
+        # Calcul moyenne annuelle quotidienne + annuel (MWh/m²)
+        import calendar
+        days = np.array([calendar.monthrange(date.today().year, m)[1] for m in range(1,13)])
+        daily_avg = (df_ray["Rayonnement quotidien - horizontal (kWh/m²/j)"] * days).sum() / days.sum()
+        annual_MWh = daily_avg * 365.0 / 1000.0
+
+        st.dataframe(df_ray, hide_index=True, use_container_width=True)
+        st.caption(f"📊 **Rayonnement quotidien moyen (horizontal)** : {daily_avg:.2f} kWh/m²/j • **Annuel** ≈ {annual_MWh:.2f} MWh/m²")
+
+    else:
+        st.info("Pas de colonne **Rayon. horiz. (kWh/m²/j)** dans le climat du Bloc 1. Tu pourras fournir le mensuel RETScreen au Bloc 3.")
+
+# ---------------- Stockage pour la suite ----------------
+st.session_state["load_params"] = {
+    "type_install": type_install,
+    "t_int_C": float(t_int), "t_min_C": float(t_min), "t_max_C": float(t_max), "strat_C": float(strat),
+    "surf_m2": float(surf_m2), "surf_ft2": float(surf_ft2),
+    "R_roof_SI": float(r_roof_si), "R_wall_SI": float(r_wall_si),
+    "R_roof_US": float(r_roof_us), "R_wall_US": float(r_wall_us),
+    "qv_lps": float(qv_lps), "qv_cfm": float(qv_cfm),
+    "j_sem": int(j_sem), "h_j_sem": float(h_j_sem), "j_wkd": int(j_wkd), "h_j_wkd": float(h_j_wkd),
+    "heures_sem": float(heures_sem), "heures_an": float(heures_sem*52.0),
+}
+st.session_state["usage_mensuel_charge"] = usage_df
 
 # ==============================
 # BLOC 3 – Paramètres du capteur solaire à air
@@ -532,132 +658,6 @@ else:
     colS3.metric("Débit surfacique", f"{eps_display:,.2f} CFM/pi² 🔴")
 st.caption("🎯 Règle : dimensionner pour rester **8–10 CFM/pi²** (≈ **40–51 L/s·m²**) sur la période d'utilisation.")
 
-# =========================================================
-# BLOC 2 — Charge & exploitation (style RETScreen)
-# =========================================================
-st.header("2) Charge & exploitation")
-
-unit_mode = st.session_state.get("unit_mode", "Métrique (SI)")
-
-# Conversions
-FT2_PER_M2  = 10.7639
-M2_PER_FT2  = 1.0 / FT2_PER_M2
-CFM_PER_LPS = 2.11888
-LPS_PER_CFM = 1.0 / CFM_PER_LPS
-R_SI_PER_R_US = 0.1761101838   # m²·K/W par (h·ft²·°F/Btu)
-R_US_PER_R_SI = 1.0 / R_SI_PER_R_US
-
-def m2_to_ft2(x): return x * FT2_PER_M2
-def ft2_to_m2(x): return x * M2_PER_FT2
-def lps_to_cfm(x): return x * CFM_PER_LPS
-def cfm_to_lps(x): return x * LPS_PER_LPS
-
-# ---------------- Caractéristiques de la charge ----------------
-with st.expander("Caractéristiques de la charge (réf./proposé)", expanded=True):
-    colA, colB = st.columns(2)
-    type_install = colA.selectbox("Type d'installation", ["Industriel", "Commercial", "Institutionnel", "Autre"], index=0)
-
-    # Températures
-    cT1, cT2, cT3, cT4 = st.columns(4)
-    t_int = cT1.number_input("Température intérieure (°C)", value=float(st.session_state.get("t_int", 20.0)), step=0.5)
-    t_min = cT2.number_input("T° air - minimum (°C)", value=float(st.session_state.get("t_min", -10.0)), step=0.5)
-    t_max = cT3.number_input("T° air - maximum (°C)", value=float(st.session_state.get("t_max", 25.0)), step=0.5)
-    strat = cT4.number_input("Stratification intérieure (°C)", value=float(st.session_state.get("strat", 0.0)), step=0.5)
-
-    # Surface planchers + valeurs R (RSI en SI, R-us en imp)
-    cS1, cS2, cS3 = st.columns(3)
-    if unit_mode.startswith("Imp"):
-        surf_ft2 = cS1.number_input("Surface de planchers (pi²)", min_value=0.0,
-                                    value=float(st.session_state.get("surf_ft2", 20000.0)), step=500.0, format="%.0f")
-        r_roof_us = cS2.number_input("Valeur R - plafond (h·ft²·°F/Btu)", min_value=0.1,
-                                     value=float(st.session_state.get("r_roof_us", 20.0)), step=1.0)
-        r_wall_us = cS3.number_input("Valeur R - mur (h·ft²·°F/Btu)", min_value=0.1,
-                                     value=float(st.session_state.get("r_wall_us", 12.0)), step=1.0)
-        surf_m2 = ft2_to_m2(surf_ft2)
-        r_roof_si = r_roof_us * R_SI_PER_R_US
-        r_wall_si = r_wall_us * R_SI_PER_R_US
-    else:
-        surf_m2 = cS1.number_input("Surface de planchers (m²)", min_value=0.0,
-                                   value=float(st.session_state.get("surf_m2", 1858.0)), step=10.0, format="%.1f")
-        r_roof_si = cS2.number_input("Valeur R - plafond (m²·°C/W)", min_value=0.1,
-                                     value=float(st.session_state.get("r_roof_si", 3.5)), step=0.1)
-        r_wall_si = cS3.number_input("Valeur R - mur (m²·°C/W)", min_value=0.1,
-                                     value=float(st.session_state.get("r_wall_si", 2.1)), step=0.1)
-        surf_ft2 = m2_to_ft2(surf_m2)
-        r_roof_us = r_roof_si * R_US_PER_R_SI
-        r_wall_us = r_wall_si * R_US_PER_R_SI
-
-    # Débit d'air de conception (cohérent avec Bloc 3 si tu l'utilises déjà)
-    if unit_mode.startswith("Imp"):
-        qv_cfm = st.number_input("Débit d'air de conception (CFM)", min_value=0.0,
-                                 value=float(st.session_state.get("qv_cfm", 10000.0)), step=100.0, format="%.0f")
-        qv_lps = qv_cfm / CFM_PER_LPS
-    else:
-        qv_lps = st.number_input("Débit d'air de conception (L/s)", min_value=0.0,
-                                 value=float(st.session_state.get("qv_lps", 5000.0)), step=50.0, format="%.0f")
-        qv_cfm = qv_lps * CFM_PER_LPS
-
-# ---------------- Horaire d’opération ----------------
-with st.expander("Horaire d’opération", expanded=True):
-    cH1, cH2, cH3, cH4 = st.columns(4)
-    j_sem   = cH1.number_input("Jours/sem (semaine)", min_value=0, max_value=7, value=int(st.session_state.get("j_sem", 5)))
-    h_j_sem = cH2.number_input("Heures/jour (semaine)", min_value=0.0, max_value=24.0, value=float(st.session_state.get("h_j_sem", 8.0)), step=0.5)
-    j_wkd   = cH3.number_input("Jours/sem (fins de semaine)", min_value=0, max_value=2, value=int(st.session_state.get("j_wkd", 0)))
-    h_j_wkd = cH4.number_input("Heures/jour (fins de semaine)", min_value=0.0, max_value=24.0, value=float(st.session_state.get("h_j_wkd", 0.0)), step=0.5)
-
-    heures_sem = j_sem * h_j_sem + j_wkd * h_j_wkd
-    st.caption(f"⏱️ **Heures d'opération / semaine** : **{heures_sem:.1f} h/sem** (≈ {heures_sem*52:.0f} h/an)")
-
-# ---------------- Portion d'utilisation mensuelle + Rayonnement ----------------
-with st.expander("Portion d’utilisation mensuelle & rayonnement", expanded=True):
-    # Table d’usage (réf/proposé)
-    mois_labels = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
-    usage_df = pd.DataFrame({
-        "Mois": mois_labels,
-        "Utilisation % (réf.)":    [100]*12,
-        "Utilisation % (proposé)": [100]*12,
-    })
-    col_cfg = {
-        "Utilisation % (réf.)": st.column_config.NumberColumn(min_value=0, max_value=100, step=1, format="%d"),
-        "Utilisation % (proposé)": st.column_config.NumberColumn(min_value=0, max_value=100, step=1, format="%d"),
-    }
-    usage_df = st.data_editor(usage_df, hide_index=True, use_container_width=True, column_config=col_cfg)
-    for c in ["Utilisation % (réf.)","Utilisation % (proposé)"]:
-        usage_df[c] = pd.to_numeric(usage_df[c], errors="coerce").fillna(0).clip(0, 100)
-
-    # Rayonnement quotidien (kWh/m²/j) — depuis le climat du Bloc 1 s'il existe
-    clim_df = st.session_state.get("climat_mensuel_df", None)
-    if (clim_df is not None) and ("Rayon. horiz. (kWh/m²/j)" in clim_df.columns):
-        df_ray = pd.DataFrame({"Mois": mois_labels})
-        df_ray["Rayonnement quotidien - horizontal (kWh/m²/j)"] = np.asarray(clim_df["Rayon. horiz. (kWh/m²/j)"], dtype=float)
-
-        # Incliné (si tu n'as pas mieux ici, on duplique à titre d'aperçu ; le vrai “sur plan du mur” sera en Bloc 3)
-        df_ray["Rayonnement quotidien - incliné (kWh/m²/j)"] = df_ray["Rayonnement quotidien - horizontal (kWh/m²/j)"]
-
-        # Calcul moyenne annuelle quotidienne + annuel (MWh/m²)
-        import calendar
-        days = np.array([calendar.monthrange(date.today().year, m)[1] for m in range(1,13)])
-        daily_avg = (df_ray["Rayonnement quotidien - horizontal (kWh/m²/j)"] * days).sum() / days.sum()
-        annual_MWh = daily_avg * 365.0 / 1000.0
-
-        st.dataframe(df_ray, hide_index=True, use_container_width=True)
-        st.caption(f"📊 **Rayonnement quotidien moyen (horizontal)** : {daily_avg:.2f} kWh/m²/j • **Annuel** ≈ {annual_MWh:.2f} MWh/m²")
-
-    else:
-        st.info("Pas de colonne **Rayon. horiz. (kWh/m²/j)** dans le climat du Bloc 1. Tu pourras fournir le mensuel RETScreen au Bloc 3.")
-
-# ---------------- Stockage pour la suite ----------------
-st.session_state["load_params"] = {
-    "type_install": type_install,
-    "t_int_C": float(t_int), "t_min_C": float(t_min), "t_max_C": float(t_max), "strat_C": float(strat),
-    "surf_m2": float(surf_m2), "surf_ft2": float(surf_ft2),
-    "R_roof_SI": float(r_roof_si), "R_wall_SI": float(r_wall_si),
-    "R_roof_US": float(r_roof_us), "R_wall_US": float(r_wall_us),
-    "qv_lps": float(qv_lps), "qv_cfm": float(qv_cfm),
-    "j_sem": int(j_sem), "h_j_sem": float(h_j_sem), "j_wkd": int(j_wkd), "h_j_wkd": float(h_j_wkd),
-    "heures_sem": float(heures_sem), "heures_an": float(heures_sem*52.0),
-}
-st.session_state["usage_mensuel_charge"] = usage_df
 
 
 # ==============================
@@ -880,6 +880,7 @@ except Exception:
     st.info("📄 Export PDF : installe `fpdf` pour activer (requirements.txt → fpdf).")
 
 st.caption("⚠️ MVP pédagogique : à valider/étalonner avec RETScreen & mesures (rendements, climat, périodes, pertes spécifiques site).")
+
 
 
 
