@@ -279,11 +279,19 @@ with st.expander("Paramètres du capteur (type, surface, pertes)", expanded=True
 with st.expander("Débit d’air & dimensionnement (SRCC 8–10 CFM/pi²)", expanded=True):
     # Saisie du débit total
     if unit_mode.startswith("Imp"):
-        qv_cfm = st.number_input("Débit volumique total (CFM)", min_value=0.0, value=float(st.session_state.get("qv_cfm", 0.0)), step=50.0)
-        qv_lps = cfm_to_lps(qv_cfm)
-    else:
-        qv_lps = st.number_input("Débit volumique total (L/s)", min_value=0.0, value=float(st.session_state.get("qv_lps", 0.0)), step=10.0)
-        qv_cfm = lps_to_cfm(qv_lps)
+    qv_cfm = st.number_input(
+        "Débit volumique total (CFM)",
+        min_value=0.0, value=float(st.session_state.get("qv_cfm", 10000.0)),
+        step=100.0, format="%.0f"   # ← grands entiers (ex. 60000)
+    )
+    qv_lps = cfm_to_lps(qv_cfm)
+else:
+    qv_lps = st.number_input(
+        "Débit volumique total (L/s)",
+        min_value=0.0, value=float(st.session_state.get("qv_lps", 5000.0)),
+        step=50.0, format="%.0f"    # ← grands entiers (ex. 30000 L/s)
+    )
+    qv_cfm = lps_to_cfm(qv_lps)
 
     # Cible configurable (par défaut 8–10 CFM/pi²)
     c1, c2 = st.columns(2)
@@ -615,6 +623,7 @@ except Exception:
     st.info("📄 Export PDF : installe `fpdf` pour activer (requirements.txt → fpdf).")
 
 st.caption("⚠️ MVP pédagogique : à valider/étalonner avec RETScreen & mesures (rendements, climat, périodes, pertes spécifiques site).")
+
 
 
 
