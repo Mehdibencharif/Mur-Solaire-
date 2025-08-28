@@ -660,132 +660,81 @@ st.caption("🎯 Règle : dimensionner pour rester **8–10 CFM/pi²** (≈ **40
 
 
 
-# ==============================
-# BLOC 3 – Coûts & Économies
-# ==============================
-st.header("3) Coûts & Économies")
+# =========================================================
+# BLOC 4 — Coûts, marge & subventions (règle 75/25)
+# =========================================================
+st.header("4) Coûts, marge & subventions")
 
-# 3.1 Performance thermique et disponibilité
-colp1, colp2, colp3 = st.columns(3)
-eta0 = colp1.number_input("Rendement nominal η₀ (fraction)", value=0.65, min_value=0.1, max_value=0.9, step=0.01)
-sys_derate = colp2.number_input("Pertes système (ventilateur, fuites, etc.) %", value=5.0, min_value=0.0, max_value=20.0, step=0.5)
-frac_saison = colp3.slider("Part de l’irradiation utile (chauffe) %", min_value=20, max_value=100, value=70, step=5)
+# Aire capteur (stockée en m² dans les blocs précédents)
+FT2_PER_M2 = 10.7639
+surface_m2 = float(st.session_state.get("surface_m2", 0.0))
+surface_ft2 = surface_m2 * FT2_PER_M2
 
-colp4, colp5 = st.columns(2)
-avail = colp4.slider("Disponibilité opérationnelle (%)", min_value=50, max_value=100, value=95, step=1)
-perte_globale = (1 - sys_derate/100.0) * (frac_saison/100.0) * (avail/100.0)
-colp5.metric("Facteur de disponibilité global", f"{perte_globale*100:,.1f}%")
+# ---------- Paramètres de coûts ----------
+colC1, colC2, colC3, colC4 = st.columns(4)
+c_mat = colC1.number_input("Matériaux ($/pi²)", min_value=0.0, value=22.0, step=1.0)
+c_inst = colC2.number_input("Installation ($/pi²)", min_value=0.0, value=12.0, step=1.0)
+c_mon  = colC3.number_input("Monitoring ($)", min_value=0.0, value=5000.0, step=500.0)
+marge_pct = colC4.slider("Marge entreprise (%)", min_value=0, max_value=100, value=20, step=1)
 
-# Chaleur utile annuelle
-if annual_kwh_m2_utile is not None:
-    q_util_kwh = surface_m2 * annual_kwh_m2_utile * eta0 * (1 - sys_derate/100.0) * (frac_saison/100.0) * (avail/100.0)
-    st.subheader("🔸 Chaleur utile estimée")
-    st.metric("Q utile (kWh/an)", f"{q_util_kwh:,.0f}")
+# Sous-total & marge
+cout_mat = surface_ft2 * c_mat
+cout_inst = surface_ft2 * c_inst
+sous_total = cout_mat + cout_inst + c_mon
+marge = sous_total * (marge_pct / 100.0)
+capex_avant_sub = sous_total + marge
+
+# ---------- Subventions ----------
+st.subheader("Subventions (Ministère + Énergir/Écoperformance)")
+sub_mode = st.radio("Mode de saisie", ["% du CAPEX", "Montants fixes ($)"], horizontal=True)
+
+if sub_mode == "% du CAPEX":
+    cols = st.columns(2)
+    pct_ministere = cols[0].number_input("Ministère (% du CAPEX)", min_value=0.0, max_value=100.0, value=15.0, step=1.0)
+    pct_energir   = cols[1].number_input("Énergir/Écoperformance (% du CAPEX)", min_value=0.0, max_value=100.0, value=10.0, step=1.0)
+    sub_brut = capex_avant_sub * (pct_ministere + pct_energir) / 100.0
+    details_sub = f"{pct_ministere:.0f}% + {pct_energir:.0f}%"
 else:
-    q_util_kwh = 0.0
-    st.info("Saisir ou importer l’irradiation pour calculer la chaleur utile.")
+    cols = st.columns(2)
+    amt_ministere = cols[0].number_input("Ministère ($)", min_value=0.0, value=0.0, step=1000.0, format="%.0f")
+    amt_energir   = cols[1].number_input("Énergir/Écoperformance ($)", min_value=0.0, value=0.0, step=1000.0, format="%.0f")
+    sub_brut = amt_ministere + amt_energir
+    details_sub = f"{amt_ministere:,.0f}$ + {amt_energir:,.0f}$"
 
-# 3.2 Substitution énergétique & économies
-energie_cible = st.selectbox("Énergie remplacée principalement", ["Gaz naturel", "Électricité", "Autre (kWh équivalent)"])
-colc1, colc2, colc3 = st.columns(3)
-prix_gaz_kwh = colc1.number_input("Prix gaz naturel ($/kWh PCI)", value=0.050, format="%.3f")
-prix_el_kwh = colc2.number_input("Prix électricité ($/kWh)", value=0.100, format="%.3f")
-rendement_chauffage = colc3.number_input("Rendement chauffage existant (%)", value=85.0, min_value=40.0, max_value=100.0, step=1.0)
+# Règle 75/25 : subventions ≤ 25 % du CAPEX (après marge)
+plafond_sub = 0.25 * capex_avant_sub
+sub_appliquee = min(sub_brut, plafond_sub)
+plafonnee = sub_brut > plafond_sub
 
-kwh_final_evit = 0.0
-eco_dollars = 0.0
-ges_tonnes = 0.0
-
-if q_util_kwh > 0:
-    rdt = max(rendement_chauffage/100.0, 1e-6)
-    if energie_cible == "Gaz naturel":
-        val_kwh = prix_gaz_kwh
-        ges_factor = CO2_KG_PER_KWH_NG
-    elif energie_cible == "Électricité":
-        val_kwh = prix_el_kwh
-        ges_factor = CO2_KG_PER_KWH_QC
-    else:
-        colx1, colx2 = st.columns(2)
-        val_kwh = colx1.number_input("Tarif ($/kWh équivalent)", value=0.070, format="%.3f")
-        ges_factor = colx2.number_input("Facteur GES (kg CO₂e/kWh)", value=0.100, format="%.3f")
-
-    kwh_final_evit = q_util_kwh / rdt
-    eco_dollars = kwh_final_evit * val_kwh
-    ges_tonnes = (kwh_final_evit * ges_factor) / 1000.0
-
-    met1, met2, met3 = st.columns(3)
-    met1.metric("Énergie finale évitée (kWh/an)", f"{kwh_final_evit:,.0f}")
-    met2.metric("Économies annuelles ($/an)", f"{eco_dollars:,.0f}")
-    met3.metric("GES évités (t CO₂e/an)", f"{ges_tonnes:,.2f}")
-
-# 3.3 Coûts, marge & subventions
-st.subheader("Coûts, marge & subventions")
-colk1, colk2, colk3 = st.columns(3)
-cout_mat_pi2 = colk1.number_input("Matériaux ($/pi²)", value=24.0, step=1.0)
-cout_mo_pi2  = colk1.number_input("Main-d'œuvre ($/pi²)", value=12.0, step=1.0)
-autres_fixes = colk2.number_input("Autres coûts fixes ($)", value=0.0, step=500.0)
-
-marge_pct = colk2.number_input("Marge (%)", value=20.0, min_value=0.0, max_value=50.0, step=1.0)
-sub_type = colk3.selectbox("Type de subvention", ["Aucune", "% du CAPEX", "$ par m² (plafonné)"])
-
-area_m2 = float(st.session_state.get("surface_m2", 150.0))
-area_ft2 = m2_to_ft2(area_m2)
-
-capex_base = area_ft2 * (cout_mat_pi2 + cout_mo_pi2) + autres_fixes
-marge = capex_base * (marge_pct/100.0)
-capex_avant_sub = capex_base + marge
-
-sub_amount = 0.0
-if sub_type == "% du CAPEX":
-    sub_pct = st.number_input("Subvention (% du CAPEX)", value=30.0, min_value=0.0, max_value=90.0, step=1.0)
-    sub_amount = capex_avant_sub * (sub_pct/100.0)
-elif sub_type == "$ par m² (plafonné)":
-    sub_per_m2 = st.number_input("$ par m²", value=150.0, step=10.0)
-    sub_cap = st.number_input("Plafond de subvention ($)", value=250000.0, step=5000.0)
-    sub_amount = min(area_m2 * sub_per_m2, sub_cap)
-
-capex_net = max(capex_avant_sub - sub_amount, 0.0)
+# ---------- Totaux ----------
+invest_net = max(capex_avant_sub - sub_appliquee, 0.0)
+solde_pct = (invest_net / capex_avant_sub * 100.0) if capex_avant_sub > 0 else 100.0
+sub_pct_effectif = (sub_appliquee / capex_avant_sub * 100.0) if capex_avant_sub > 0 else 0.0
 
 k1, k2, k3, k4 = st.columns(4)
-k1.metric("CAPEX (base)", f"{capex_base:,.0f} $")
+k1.metric("CAPEX (base)", f"{sous_total:,.0f} $")
 k2.metric("Marge", f"{marge:,.0f} $")
-k3.metric("Subvention estimée", f"{sub_amount:,.0f} $")
-k4.metric("Investissement net", f"{capex_net:,.0f} $")
+k3.metric("Subventions appliquées", f"{sub_appliquee:,.0f} $")
+k4.metric("Investissement net", f"{invest_net:,.0f} $")
 
-# 3.4 Indicateurs financiers
-st.subheader("Indicateurs financiers")
-colf1, colf2, colf3 = st.columns(3)
-years = colf1.number_input("Horizon d’analyse (ans)", min_value=1, max_value=30, value=15, step=1)
-discount = colf2.number_input("Taux d’actualisation (%)", value=6.0, min_value=0.0, max_value=20.0, step=0.5)
-escal = colf3.number_input("Escalade prix énergie (%/an)", value=2.0, min_value=0.0, max_value=15.0, step=0.5)
-
-npv_savings = 0.0
-npv = -capex_net
-spb = float("inf")
-
-if eco_dollars > 0:
-    r = discount/100.0
-    g = escal/100.0
-    t = np.arange(1, years+1)
-    savings_nominal = eco_dollars * ((1+g)**(t-1))
-    discount_factors = 1 / ((1+r)**t)
-    npv_savings = float(np.sum(savings_nominal * discount_factors))
-    npv = npv_savings - capex_net
-    spb = capex_net / eco_dollars if eco_dollars > 0 else float("inf")
-
-    f1, f2, f3 = st.columns(3)
-    f1.metric("SPB simple (ans)", f"{spb:,.1f}" if math.isfinite(spb) else "∞")
-    f2.metric("VAN des économies ($)", f"{npv_savings:,.0f}")
-    f3.metric("VAN projet ($)", f"{npv:,.0f}")
-
-    cum_disc = np.cumsum(savings_nominal*discount_factors) - capex_net
-    fig3 = plt.figure(figsize=(6,3))
-    plt.plot(t, cum_disc)
-    plt.axhline(0, linestyle='--')
-    plt.xlabel("Années"); plt.ylabel("VAN cumulée ($)")
-    plt.title("VAN cumulée – point mort"); plt.tight_layout(); st.pyplot(fig3)
+if plafonnee:
+    st.warning(f"Les subventions saisies ({details_sub}) dépassent **25 %** du CAPEX ({capex_avant_sub:,.0f} $). "
+               f"Un **plafond de 25 %** est appliqué automatiquement (subvention effective **{sub_pct_effectif:.1f} %**).")
 else:
-    st.info("Complète la substitution énergétique pour calculer VAN/SPB.")
+    st.info(f"Subventions effectives : **{sub_pct_effectif:.1f} %** du CAPEX • Solde à payer : **{solde_pct:.1f} %** (règle 75/25 respectée)")
+
+# ---------- Persistance pour export ----------
+st.session_state["couts_finance"] = {
+    "surface_ft2": surface_ft2,
+    "cout_mat_unit": c_mat, "cout_inst_unit": c_inst, "monitoring": c_mon,
+    "cout_mat_total": cout_mat, "cout_inst_total": cout_inst,
+    "marge_pct": marge_pct, "marge": marge,
+    "capex_avant_sub": capex_avant_sub,
+    "sub_mode": sub_mode, "sub_details_saisie": details_sub,
+    "sub_brut": sub_brut, "sub_plafond_25pct": plafond_sub,
+    "sub_appliquee": sub_appliquee,
+    "invest_net": invest_net, "solde_pct": solde_pct, "sub_pct_effectif": sub_pct_effectif,
+}
 
 # ==============================
 # BLOC 4 – Résumé & Export
@@ -880,6 +829,7 @@ except Exception:
     st.info("📄 Export PDF : installe `fpdf` pour activer (requirements.txt → fpdf).")
 
 st.caption("⚠️ MVP pédagogique : à valider/étalonner avec RETScreen & mesures (rendements, climat, périodes, pertes spécifiques site).")
+
 
 
 
