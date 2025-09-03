@@ -205,17 +205,15 @@ st.pydeck_chart(deck, use_container_width=True)
 # =========================================================
 # BLOC CLIMAT — Auto (Meteostat) avec DIAGNOSTIC + Plans B
 # =========================================================
+# =========================================================
+# BLOC CLIMAT – Catalogue interne + Saisie + Import CSV
+# =========================================================
 
-DEFAULT_LAT, DEFAULT_LON = 46.813900, -71.208000
 st.subheader("Climat du site – aperçu (normales 1991–2020)")
 
-# ---- Adresse & coords depuis l'appli
-adresse = st.session_state.get("adresse", "").strip()
-lat = float(st.session_state.get("lat", DEFAULT_LAT))
-lon = float(st.session_state.get("lon", DEFAULT_LON))
-
-# ---- Helpers
-MOIS_FR = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
+# ------------------------- Helpers -------------------------
+MOIS_FR = ["Janvier","Février","Mars","Avril","Mai","Juin",
+           "Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
 
 def compute_degree_days(df, base_heat=18.0, base_cool=10.0, year=None):
     import calendar
@@ -228,143 +226,140 @@ def compute_degree_days(df, base_heat=18.0, base_cool=10.0, year=None):
     out["DD10 (°C·j)"] = np.round(np.maximum(0.0, T - base_cool) * days, 0)
     return out
 
-DEFAULT_CLIMATE_SADM = {
-    "Mois": MOIS_FR,
-    "Temp. air (°C)": [-12.4, -11.0, -4.6, 3.3, 10.8, 16.3, 19.1, 17.2, 12.5, 6.5, 0.5, -9.1],
-    "HR (%)": [69.1, 66.8, 66.1, 64.4, 64.0, 68.8, 73.6, 74.1, 75.9, 74.1, 74.1, 75.0],
-    "Précip. (mm)": [68.29, 64.52, 79.27, 81.89, 96.29, 119.33, 122.19, 114.88, 102.99, 112.61, 101.26, 92.38],
-    "Pression (kPa)": [100.6, 100.6, 100.5, 100.5, 100.6, 100.5, 100.4, 100.5, 100.7, 100.8, 100.7, 100.7],
-    "Vent (m/s)": [4.7, 4.7, 4.7, 4.5, 4.2, 3.6, 3.1, 3.4, 3.3, 3.9, 4.3, 4.5],
-}
-DEFAULT_CLIMATE_SADM = compute_degree_days(pd.DataFrame(DEFAULT_CLIMATE_SADM))
+def df_from_monthly_arrays(t_air, rh=None, precip=None, press=None, wind=None):
+    data = {"Mois": MOIS_FR, "Temp. air (°C)": t_air}
+    if rh is not None:     data["HR (%)"] = rh
+    if precip is not None: data["Précip. (mm)"] = precip
+    if press is not None:  data["Pression (kPa)"] = press
+    if wind is not None:   data["Vent (m/s)"] = wind
+    df = pd.DataFrame(data)
+    return compute_degree_days(df)
 
-# ---- Source
-source_climat = st.radio(
+# --------------------- Catalogue interne --------------------
+# NOTE: valeurs "type Québec froid" par défaut. Tu peux affiner plus tard ville par ville.
+CLIM_CATALOG = {
+    # Profil générique Québec (froid) – ex. proche de Québec/SADM type
+    "Générique – Québec (SADM)": {
+        "Temp. air (°C)": [-12.4, -11.0, -4.6,  3.3, 10.8, 16.3, 19.1, 17.2, 12.5,  6.5,  0.5, -9.1],
+        "HR (%)":          [69.1,  66.8,  66.1, 64.4, 64.0, 68.8, 73.6, 74.1, 75.9, 74.1, 74.1, 75.0],
+        "Précip. (mm)":    [68.29, 64.52, 79.27, 81.89, 96.29,119.33,122.19,114.88,102.99,112.61,101.26, 92.38],
+        "Pression (kPa)":  [100.6,100.6,100.5,100.5,100.6,100.5,100.4,100.5,100.7,100.8,100.7,100.7],
+        "Vent (m/s)":      [4.7,   4.7,   4.7,  4.5,  4.2,  3.6,  3.1,  3.4,  3.3,  3.9,  4.3,  4.5],
+    },
+    # Tu peux dupliquer ce bloc et ajuster légèrement les températures pour chaque ville
+    "Sherbrooke": {
+        "Temp. air (°C)": [-11.5, -10.0, -3.8,  4.2, 11.2, 16.5, 19.0, 17.5, 12.2,  6.2,  0.0, -8.5],
+    },
+    "Québec": {
+        "Temp. air (°C)": [-12.4, -11.0, -4.6,  3.3, 10.8, 16.3, 19.1, 17.2, 12.5,  6.5,  0.5, -9.1],
+    },
+    "Montréal": {
+        "Temp. air (°C)": [ -9.7,  -8.5, -2.0,  6.0, 13.1, 18.3, 21.1, 20.2, 15.1,  8.4,  2.2, -5.8],
+    },
+    "Saguenay": {
+        "Temp. air (°C)": [-15.4, -13.7, -6.9,  1.1,  8.8, 14.5, 17.3, 15.7, 10.2,  3.2, -3.4,-11.4],
+    },
+    "Gaspé": {
+        "Temp. air (°C)": [-10.6,  -9.9, -4.3,  2.1,  7.8, 13.0, 16.5, 16.2, 11.4,  5.3, -0.6, -7.7],
+    },
+    "Rouyn-Noranda": {
+        "Temp. air (°C)": [-16.0, -13.9, -6.8,  1.1,  8.9, 14.7, 17.3, 16.0, 10.2,  3.0, -4.1,-12.7],
+    },
+}
+
+# -------------------- Choix de la méthode -------------------
+mode = st.radio(
     "Source des données climatiques",
-    ["Auto (station la plus proche)", "Préréglage SADM"],
+    ["Préréglages (catalogue interne)", "Saisie manuelle", "Importer CSV (12 mois)"],
     index=0, horizontal=True
 )
 
-# ---- DIAGNOSTIC FLAGS
-diag = {
-    "lib_meteostat_ok": False,
-    "internet_ok": False,
-    "stations_found": False,
-    "normals_found": False,
-    "error": None,
-    "station_label": None,
-}
-
-# ---- Check internet (rapide, non bloquant)
-def check_internet():
-    try:
-        import socket
-        socket.gethostbyname("www.google.com")
-        s = socket.create_connection(("www.google.com", 80), 2)
-        s.close()
-        return True
-    except Exception:
-        return False
-
-# ---- Bloc principal
 df_clim, meta = None, None
 
-if source_climat.startswith("Auto"):
-    # 1) Dispo librairie
-    try:
-        from meteostat import Stations, Normals
-        diag["lib_meteostat_ok"] = True
-    except Exception as e:
-        diag["error"] = f"Meteostat non installé ou import impossible: {e}"
+# ----------- Mode 1 : Préréglages (comme RETScreen) --------
+if mode == "Préréglages (catalogue interne)":
+    # Petite UX : pré-sélection selon l'adresse si dispo
+    addr = st.session_state.get("adresse", "")
+    suggestions = list(CLIM_CATALOG.keys())
+    default_idx = 0
+    if addr:
+        a = addr.lower()
+        for i, k in enumerate(suggestions):
+            if any(tag in a for tag in [k.lower(), "sherbrooke" if k=="Sherbrooke" else ""]):
+                default_idx = i
+                break
 
-    # 2) Internet
-    if diag["lib_meteostat_ok"]:
-        diag["internet_ok"] = check_internet()
+    choix = st.selectbox("Ville / Profil climatique :", suggestions, index=default_idx)
+    clim = CLIM_CATALOG[choix]
 
-    # 3) Stations + normales
-    if diag["lib_meteostat_ok"] and diag["internet_ok"]:
-        try:
-            stns = Stations().nearby(lat, lon).fetch(3)
-            if stns is not None and not stns.empty:
-                diag["stations_found"] = True
+    t_air = clim["Temp. air (°C)"]
+    rh = clim.get("HR (%)")
+    pr = clim.get("Précip. (mm)")
+    pk = clim.get("Pression (kPa)")
+    vw = clim.get("Vent (m/s)")
 
-                # Choix station (et distance si dispo)
-                options = []
-                for idx, row in stns.iterrows():
-                    name = str(row.get("name", idx))
-                    country = row.get("country", "")
-                    dist_km = row.get("distance", np.nan)
-                    if pd.notna(dist_km):
-                        label = f"{idx} – {name} ({country}) • {dist_km/1000:.1f} km"
-                    else:
-                        label = f"{idx} – {name} ({country})"
-                    options.append((label, idx))
+    df_clim = df_from_monthly_arrays(t_air, rh, pr, pk, vw)
+    meta = {"source": "Catalogue interne", "profil": choix}
 
-                selected_station_label = st.selectbox(
-                    "Station Meteostat (essaie-en une autre si besoin) :",
-                    [o[0] for o in options],
-                    index=0
-                )
-                chosen_id = dict(options)[selected_station_label]
-                diag["station_label"] = selected_station_label
+# ---------------- Mode 2 : Saisie manuelle (12 champs) ---------------
+elif mode == "Saisie manuelle":
+    cols = st.columns(3)
+    t_vals = []
+    for i, mois in enumerate(MOIS_FR):
+        with cols[i % 3]:
+            val = st.number_input(f"{mois} (°C)", value=float(0.0) if i not in [0,1,11] else float(-10.0),
+                                  step=0.1, format="%.1f", key=f"t_air_{i}")
+            t_vals.append(val)
+    df_clim = df_from_monthly_arrays(t_vals)
+    meta = {"source": "Saisie manuelle"}
 
-                normals = Normals(chosen_id, start=1991, end=2020).fetch()
-                if normals is not None and not normals.empty:
-                    diag["normals_found"] = True
-                    df_clim = pd.DataFrame({
-                        "Mois": MOIS_FR,
-                        "Temp. air (°C)": normals.get("tavg", pd.Series([np.nan]*12)).values,
-                        "HR (%)":        normals.get("rhum", pd.Series([np.nan]*12)).values,
-                        "Précip. (mm)":  normals.get("prcp", pd.Series([np.nan]*12)).values,
-                        "Vent (m/s)":    (normals.get("wspd", pd.Series([np.nan]*12)) / 3.6).values,
-                        "Pression (kPa)":(normals.get("pres", pd.Series([np.nan]*12)) / 10.0).values
-                    })
-                    df_clim = compute_degree_days(df_clim)
-                    meta = {"id": chosen_id, "name": stns.loc[chosen_id].get("name", chosen_id),
-                            "country": stns.loc[chosen_id].get("country", ""),
-                            "distance_m": stns.loc[chosen_id].get("distance", np.nan)}
-        except Exception as e:
-            diag["error"] = f"Echec fetch stations/normales: {e}"
-
-# ---- Fallback si Auto KO
-if df_clim is None:
-    if source_climat.startswith("Auto"):
-        # Affiche la raison exacte
-        if not diag["lib_meteostat_ok"]:
-            st.error("❌ Meteostat indisponible. Ajoute à ton requirements.txt : `meteostat`, `numpy`, `pandas`.")
-        elif not diag["internet_ok"]:
-            st.error("🌐 Pas d’accès Internet sortant : l’Auto ne peut pas interroger les stations.")
-        elif not diag["stations_found"]:
-            st.error("📡 Aucune station trouvée pour ces coordonnées.")
-        elif not diag["normals_found"]:
-            st.error("📊 Normales indisponibles pour la station sélectionnée.")
-        if diag["error"]:
-            st.caption(f"🧪 Détail technique : {diag['error']}")
-        st.warning("→ Utilisation du préréglage **SADM** ci-dessous.")
-    df_clim = DEFAULT_CLIMATE_SADM.copy()
-    meta = None
-
-# ---- Affichage tableau + métriques
-st.dataframe(df_clim, use_container_width=True, hide_index=True)
-moy_air = float(df_clim["Temp. air (°C)"].mean(skipna=True))
-sum_dd18 = float(df_clim["DD18 (°C·j)"].sum(skipna=True))
-sum_dd10 = float(df_clim["DD10 (°C·j)"].sum(skipna=True))
-
-c1, c2 = st.columns(2)
-c1.metric("T° air moyenne", f"{moy_air:.1f} °C")
-c2.metric("DD18 / DD10", f"{sum_dd18:,.0f} / {sum_dd10:,.0f} °C·j")
-
-# ---- Légende
-if source_climat.startswith("Auto") and meta:
-    dist_txt = f" • {meta['distance_m']/1000:.1f} km" if pd.notna(meta.get("distance_m", np.nan)) else ""
-    st.caption(f"📡 Station : **{meta['name']}** ({meta['country']}) — id **{meta['id']}**{dist_txt}")
+# --------------- Mode 3 : Import CSV (modèle simple) -----------------
 else:
-    st.caption("📘 Préréglage **SADM** (valeurs type) — à valider/affiner avec RETScreen.")
+    st.markdown(
+        "Téléverse un CSV avec **12 lignes** et la colonne `Temp. air (°C)` (facultatif : `HR (%)`, `Précip. (mm)`, `Pression (kPa)`, `Vent (m/s)`). "
+        "Tu peux aussi inclure une colonne `Mois` (Janvier…Décembre)."
+    )
+    example_csv = "Mois,Temp. air (°C)\n" + "\n".join([f"{m},0.0" for m in MOIS_FR])
+    with st.expander("📄 Modèle CSV (copier-coller)"):
+        st.code(example_csv, language="csv")
 
-# ---- PANNEAU DEBUG (temporaire)
-with st.expander("🛠️ Debug climat (temporaire)"):
-    st.write({"adresse": adresse, "lat": lat, "lon": lon})
-    st.write(diag)
+    file = st.file_uploader("Importer un CSV (12 lignes, encodage UTF-8)", type=["csv"])
+    if file is not None:
+        try:
+            df_up = pd.read_csv(file)
+            # Normalisation colonnes
+            rename_map = {
+                "Mois": "Mois", "mois":"Mois",
+                "Temp. air (°C)": "Temp. air (°C)",
+                "Température (°C)": "Temp. air (°C)",
+                "Temperature (°C)": "Temp. air (°C)",
+                "Temp": "Temp. air (°C)",
+                "HR (%)": "HR (%)",
+                "Précip. (mm)": "Précip. (mm)", "Precip (mm)":"Précip. (mm)", "Precipitation (mm)":"Précip. (mm)",
+                "Pression (kPa)": "Pression (kPa)", "Pressure (kPa)":"Pression (kPa)",
+                "Vent (m/s)": "Vent (m/s)", "Wind (m/s)":"Vent (m/s)"
+            }
+            df_up = df_up.rename(columns={c: rename_map.get(c, c) for c in df_up.columns})
+            # Remplir Mois si absent
+            if "Mois" not in df_up.columns or df_up["Mois"].isna().any():
+                df_up["Mois"] = MOIS_FR[:len(df_up)]
+            # Vérif longueur
+            if len(df_up) != 12:
+                st.error("Le CSV doit contenir exactement **12 lignes** (une par mois).")
+            elif "Temp. air (°C)" not in df_up.columns:
+                st.error("Colonne **Temp. air (°C)** obligatoire.")
+            else:
+                df_clim = df_up[["Mois","Temp. air (°C)"] + [c for c in ["HR (%)","Précip. (mm)","Pression (kPa)","Vent (m/s)"] if c in df_up.columns]].copy()
+                df_clim = compute_degree_days(df_clim)
+                meta = {"source": "CSV importé"}
+        except Exception as e:
+            st.error(f"Erreur de lecture CSV : {e}")
+
+# ---------------------- Affichage & sorties -------------------------
+if df_clim is not None:
+    st.dataframe(df_clim, use_container_width=True, h_
+
+
 
 # =========================================================
 # BLOC 2 — Charge & exploitation (style RETScreen)
@@ -1050,6 +1045,7 @@ try:
     )
 except Exception:
     st.info("Export PDF indisponible (bibliothèque **reportlab** manquante). L’export **Excel** reste complet.")
+
 
 
 
