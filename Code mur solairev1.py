@@ -354,7 +354,7 @@ else:
 
 # ---------------------- Affichage & sorties -------------------------
 if df_clim is not None:
-    st.dataframe(df_clim, use_container_width=True, h_
+ st.dataframe(df_clim, use_container_width=True, hide_index=True)   
 
 
 
@@ -1042,6 +1042,7 @@ try:
     )
 except Exception:
     st.info("Export PDF indisponible (bibliothèque **reportlab** manquante). L’export **Excel** reste complet.")
+
 
 
 
