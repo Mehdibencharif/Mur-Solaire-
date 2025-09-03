@@ -203,12 +203,9 @@ else:
 st.pydeck_chart(deck, use_container_width=True)
 
 # =========================================================
-# BLOC CLIMAT — Auto (Meteostat) avec DIAGNOSTIC + Plans B
-# =========================================================
-# =========================================================
 # BLOC CLIMAT – Catalogue interne + Saisie + Import CSV
 # =========================================================
-
+from io import StringIO
 st.subheader("Climat du site – aperçu (normales 1991–2020)")
 
 # ------------------------- Helpers -------------------------
@@ -1045,6 +1042,7 @@ try:
     )
 except Exception:
     st.info("Export PDF indisponible (bibliothèque **reportlab** manquante). L’export **Excel** reste complet.")
+
 
 
 
