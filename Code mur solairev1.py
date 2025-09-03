@@ -203,12 +203,64 @@ else:
 st.pydeck_chart(deck, use_container_width=True)
 
 # =========================================================
-# APERÇU CLIMAT — Auto (Meteostat) ou fallback SADM
+# BLOC CLIMAT — Normales 1991–2020 (Auto Meteostat + fallback SADM)
 # =========================================================
+import streamlit as st
+import numpy as np
+import pandas as pd
+
+# Valeurs par défaut si lat/lon non définies plus haut
+DEFAULT_LAT, DEFAULT_LON = 46.813900, -71.208000
+
 st.subheader("Climat du site – aperçu (normales 1991–2020)")
 
+# --- Récupération de l'adresse depuis le Bloc 1 (si présent)
+adresse = st.session_state.get("adresse", "").strip()
+
+# --- Détection de changement d'adresse + géocodage si la fonction existe
+last_addr = st.session_state.get("_last_addr", "")
+addr_changed = (adresse != "" and adresse != last_addr)
+
+if addr_changed:
+    st.session_state["_last_addr"] = adresse
+    # Si la fonction geocode_addr() existe (définie dans le Bloc 1), on l'utilise
+    if "geocode_addr" in globals():
+        coords = geocode_addr(adresse)
+    else:
+        coords = None
+
+    if coords:
+        st.session_state["lat"], st.session_state["lon"] = float(coords[0]), float(coords[1])
+    else:
+        st.info("🔎 Géocodage indisponible : lat/lon conservés (ajuste-les manuellement au besoin).")
+
+# --- Inputs Latitude/Longitude (avec mémorisation des changements)
+colA, colB = st.columns(2)
+with colA:
+    lat = st.number_input(
+        "Latitude",
+        value=float(st.session_state.get("lat", DEFAULT_LAT)),
+        format="%.6f",
+        key="lat_input"
+    )
+with colB:
+    lon = st.number_input(
+        "Longitude",
+        value=float(st.session_state.get("lon", DEFAULT_LON)),
+        format="%.6f",
+        key="lon_input"
+    )
+
+lat_changed = (st.session_state.get("_last_lat") != lat)
+lon_changed = (st.session_state.get("_last_lon") != lon)
+if lat_changed or lon_changed:
+    st.session_state["_last_lat"] = lat
+    st.session_state["_last_lon"] = lon
+    st.session_state["lat"], st.session_state["lon"] = float(lat), float(lon)
+
 # --- Helpers ---
-MOIS_FR = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
+MOIS_FR = ["Janvier","Février","Mars","Avril","Mai","Juin",
+           "Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
 
 def compute_degree_days(df, base_heat=18.0, base_cool=10.0, year=None):
     import calendar
@@ -238,7 +290,7 @@ def fetch_climate_normals_by_coords(lat: float, lon: float, cache_key: str):
     try:
         normals = Normals(stn_id, start=1991, end=2020).fetch()
     except Exception:
-        # Station trouvée mais fetch échoue -> retourne meta pour afficher la légende
+        # Station trouvée mais échec du fetch : renvoyer meta pour info
         return None, meta
 
     df = pd.DataFrame({
@@ -252,7 +304,7 @@ def fetch_climate_normals_by_coords(lat: float, lon: float, cache_key: str):
     df = compute_degree_days(df)
     return df, meta
 
-# Fallback SADM (valeurs type, 12 mois)
+# --- Fallback SADM (valeurs type, 12 mois)
 DEFAULT_CLIMATE_SADM = {
     "Mois": MOIS_FR,
     "Temp. air (°C)": [-12.4, -11.0, -4.6, 3.3, 10.8, 16.3, 19.1, 17.2, 12.5, 6.5, 0.5, -9.1],
@@ -263,67 +315,71 @@ DEFAULT_CLIMATE_SADM = {
 }
 DEFAULT_CLIMATE_SADM = compute_degree_days(pd.DataFrame(DEFAULT_CLIMATE_SADM))
 
-# Sélecteur source
+# --- Sélecteur de source
 source_climat = st.radio(
     "Source des données climatiques",
     ["Auto (station la plus proche)", "Préréglage SADM"],
-    index=0, horizontal=True
+    index=0, horizontal=True, key="src_climat_radio"
 )
+src_changed = (st.session_state.get("_last_src") != source_climat)
+if src_changed:
+    st.session_state["_last_src"] = source_climat
 
-# -- Clé de cache liée à la position & source (évite un tableau figé quand tu changes de site)
-lat_r = round(float(lat), 4)
-lon_r = round(float(lon), 4)
+# --- Clé de cache liée à position & source
+lat_r = round(float(st.session_state.get("lat", DEFAULT_LAT)), 4)
+lon_r = round(float(st.session_state.get("lon", DEFAULT_LON)), 4)
 src_tag = "AUTO" if source_climat.startswith("Auto") else "SADM"
 cache_key = f"{lat_r}_{lon_r}_{src_tag}"
 
-# Récupération
+# --- Rafraîchissement si un élément a changé
+if addr_changed or lat_changed or lon_changed or src_changed:
+    st.cache_data.clear()
+    st.toast("♻️ Données climat rafraîchies (adresse/coords/source modifiés).")
+    st.session_state["_last_cache_key"] = cache_key
+    st.rerun()
+
+# --- Bouton de secours pour forcer le refresh
+if st.button("🔄 Forcer le rafraîchissement des normales climat"):
+    st.cache_data.clear()
+    st.session_state["_last_cache_key"] = cache_key
+    st.rerun()
+
+# --- Récupération des normales
 df_clim, meta = (None, None)
 if source_climat.startswith("Auto"):
     df_clim, meta = fetch_climate_normals_by_coords(lat_r, lon_r, cache_key)
     if df_clim is None:
-        st.warning("Auto indisponible (librairie ou station). Utilisation du préréglage **SADM**.")
-        df_clim = DEFAULT_CLIMATE_SADM.copy()
-        meta = None
+        st.warning("Auto indisponible (librairie/station). Utilisation du préréglage **SADM**.")
+        df_clim = DEFAULT_CLIMATE_SADM.copy(); meta = None
 else:
-    df_clim = DEFAULT_CLIMATE_SADM.copy()
-    meta = None
+    df_clim = DEFAULT_CLIMATE_SADM.copy(); meta = None
 
-# Affichage tableau + synthèse
+# --- Affichage tableau + métriques
 st.dataframe(df_clim, use_container_width=True, hide_index=True)
 
 moy_air = float(df_clim["Temp. air (°C)"].mean(skipna=True))
 sum_dd18 = float(df_clim["DD18 (°C·j)"].sum(skipna=True))
 sum_dd10 = float(df_clim["DD10 (°C·j)"].sum(skipna=True))
 
-# 👉 Si tu veux encore afficher le vent moyen, décommente ces 2 lignes :
-# moy_vent = float(df_clim["Vent (m/s)"].mean(skipna=True)) if "Vent (m/s)" in df_clim else float("nan")
-
-# Métriques
-# (version sans vent)
 c1, c2 = st.columns(2)
 c1.metric("T° air moyenne", f"{moy_air:.1f} °C")
 c2.metric("DD18 / DD10", f"{sum_dd18:,.0f} / {sum_dd10:,.0f} °C·j")
 
-# (si tu veux la version avec vent, remplace ci-dessus par:)
-# c1, c2, c3 = st.columns(3)
-# c1.metric("T° air moyenne", f"{moy_air:.1f} °C")
-# c2.metric("Vent moyen", f"{moy_vent:.1f} m/s")
-# c3.metric("DD18 / DD10", f"{sum_dd18:,.0f} / {sum_dd10:,.0f} °C·j")
-
-# Légende station (si auto)
+# --- Légende station (si Auto)
 if meta:
     nom = meta.get("name", "?"); pays = meta.get("country", "")
     st.caption(f"📡 Station la plus proche : **{nom}** ({pays}) • normales 1991–2020 (Meteostat).")
 else:
     st.caption("📘 Préréglage **SADM** (valeurs type) — à valider/affiner avec RETScreen.")
 
-# Stockage pour réutilisation ultérieure
+# --- Stockage pour réutilisation
 st.session_state["climat_mensuel_df"] = df_clim
 st.session_state["climat_meta"] = {
     "latitude": float(lat_r),
     "longitude": float(lon_r),
     "source": "Auto/Meteostat" if meta else "Préréglage SADM",
 }
+
 
 # =========================================================
 # BLOC 2 — Charge & exploitation (style RETScreen)
@@ -1009,6 +1065,7 @@ try:
     )
 except Exception:
     st.info("Export PDF indisponible (bibliothèque **reportlab** manquante). L’export **Excel** reste complet.")
+
 
 
 
