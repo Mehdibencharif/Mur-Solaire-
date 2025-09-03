@@ -1,9 +1,6 @@
 import os
 import math
 import calendar
-from io import BytesIO
-from datetime import date
-
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -11,7 +8,8 @@ import matplotlib.pyplot as plt
 import pydeck as pdk
 
 from urllib.parse import quote_plus
-
+from io import BytesIO
+from datetime import date
 # ----------------------------
 # Config page
 # ----------------------------
@@ -232,39 +230,19 @@ def df_from_monthly_arrays(t_air, rh=None, precip=None, press=None, wind=None):
     df = pd.DataFrame(data)
     return compute_degree_days(df)
 
-# --------------------- Catalogue interne --------------------
-# NOTE: valeurs "type Québec froid" par défaut. Tu peux affiner plus tard ville par ville.
-CLIM_CATALOG = {
-    # Profil générique Québec (froid) – ex. proche de Québec/SADM type
-    "Générique – Québec (SADM)": {
-        "Temp. air (°C)": [-12.4, -11.0, -4.6,  3.3, 10.8, 16.3, 19.1, 17.2, 12.5,  6.5,  0.5, -9.1],
-        "HR (%)":          [69.1,  66.8,  66.1, 64.4, 64.0, 68.8, 73.6, 74.1, 75.9, 74.1, 74.1, 75.0],
-        "Précip. (mm)":    [68.29, 64.52, 79.27, 81.89, 96.29,119.33,122.19,114.88,102.99,112.61,101.26, 92.38],
-        "Pression (kPa)":  [100.6,100.6,100.5,100.5,100.6,100.5,100.4,100.5,100.7,100.8,100.7,100.7],
-        "Vent (m/s)":      [4.7,   4.7,   4.7,  4.5,  4.2,  3.6,  3.1,  3.4,  3.3,  3.9,  4.3,  4.5],
-    },
-    # Tu peux dupliquer ce bloc et ajuster légèrement les températures pour chaque ville
-    "Sherbrooke": {
-        "Temp. air (°C)": [-11.5, -10.0, -3.8,  4.2, 11.2, 16.5, 19.0, 17.5, 12.2,  6.2,  0.0, -8.5],
-    },
-    "Québec": {
-        "Temp. air (°C)": [-12.4, -11.0, -4.6,  3.3, 10.8, 16.3, 19.1, 17.2, 12.5,  6.5,  0.5, -9.1],
-    },
-    "Montréal": {
-        "Temp. air (°C)": [ -9.7,  -8.5, -2.0,  6.0, 13.1, 18.3, 21.1, 20.2, 15.1,  8.4,  2.2, -5.8],
-    },
-    "Saguenay": {
-        "Temp. air (°C)": [-15.4, -13.7, -6.9,  1.1,  8.8, 14.5, 17.3, 15.7, 10.2,  3.2, -3.4,-11.4],
-    },
-    "Gaspé": {
-        "Temp. air (°C)": [-10.6,  -9.9, -4.3,  2.1,  7.8, 13.0, 16.5, 16.2, 11.4,  5.3, -0.6, -7.7],
-    },
-    "Rouyn-Noranda": {
-        "Temp. air (°C)": [-16.0, -13.9, -6.8,  1.1,  8.9, 14.7, 17.3, 16.0, 10.2,  3.0, -4.1,-12.7],
-    },
-}
+# ------- Charger le catalogue interne (JSON partagé d'équipe) -------
+@st.cache_data(show_spinner=False)
+def load_clim_catalog(path="data/climat_qc.json"):
+    import json
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-# -------------------- Choix de la méthode -------------------
+try:
+    CATALOG = load_clim_catalog()
+except Exception as e:
+    st.error(f"Catalogue climatique introuvable: {e}")
+    CATALOG = {}
+
 mode = st.radio(
     "Source des données climatiques",
     ["Préréglages (catalogue interne)", "Saisie manuelle", "Importer CSV (12 mois)"],
@@ -273,91 +251,62 @@ mode = st.radio(
 
 df_clim, meta = None, None
 
-# ----------- Mode 1 : Préréglages (comme RETScreen) --------
 if mode == "Préréglages (catalogue interne)":
-    # Petite UX : pré-sélection selon l'adresse si dispo
-    addr = st.session_state.get("adresse", "")
-    suggestions = list(CLIM_CATALOG.keys())
+    # Pré-sélection (adresse)
+    suggestions = list(CATALOG.keys())
     default_idx = 0
-    if addr:
-        a = addr.lower()
-        for i, k in enumerate(suggestions):
-            if any(tag in a for tag in [k.lower(), "sherbrooke" if k=="Sherbrooke" else ""]):
-                default_idx = i
-                break
+    addr = (st.session_state.get("adresse","") or "").lower()
+    for i,k in enumerate(suggestions):
+        if k.lower() in addr:
+            default_idx = i; break
 
-    choix = st.selectbox("Ville / Profil climatique :", suggestions, index=default_idx)
-    clim = CLIM_CATALOG[choix]
+    choix = st.selectbox("Ville / Profil", suggestions, index=default_idx)
+    rec = CATALOG[choix]
+    T = rec["temp_c"]                           # 12 valeurs
+    Gm = rec.get("solar_kwh_m2", [None]*12)     # kWh/m²/mois (optionnel mais recommandé)
 
-    t_air = clim["Temp. air (°C)"]
-    rh = clim.get("HR (%)")
-    pr = clim.get("Précip. (mm)")
-    pk = clim.get("Pression (kPa)")
-    vw = clim.get("Vent (m/s)")
+    df_clim = pd.DataFrame({"Mois": MOIS_FR, "Temp. air (°C)": T})
+    # Irradiation mensuelle + quotidienne (si dispo dans le JSON)
+    if all(v is not None for v in Gm):
+        import calendar
+        days = np.array([calendar.monthrange(date.today().year, m)[1] for m in range(1,13)], dtype=float)
+        df_clim["Irrad. horiz. (kWh/m²/mois)"] = np.array(Gm, dtype=float)
+        df_clim["Rayon. horiz. (kWh/m²/j)"] = (np.array(Gm, dtype=float) / days).round(2)
 
-    df_clim = df_from_monthly_arrays(t_air, rh, pr, pk, vw)
-    meta = {"source": "Catalogue interne", "profil": choix}
+    df_clim = compute_degree_days(df_clim)
+    meta = {"source":"Catalogue interne", "profil":choix}
 
-# ---------------- Mode 2 : Saisie manuelle (12 champs) ---------------
 elif mode == "Saisie manuelle":
-    cols = st.columns(3)
-    t_vals = []
-    for i, mois in enumerate(MOIS_FR):
-        with cols[i % 3]:
-            val = st.number_input(f"{mois} (°C)", value=float(0.0) if i not in [0,1,11] else float(-10.0),
-                                  step=0.1, format="%.1f", key=f"t_air_{i}")
-            t_vals.append(val)
-    df_clim = df_from_monthly_arrays(t_vals)
-    meta = {"source": "Saisie manuelle"}
+    cols = st.columns(3); T=[]
+    for i,m in enumerate(MOIS_FR):
+        with cols[i%3]:
+            T.append(st.number_input(f"{m} (°C)", value=[-10.0,-10.0,-3.0,3.0,10.0,16.0,19.0,18.0,12.0,6.0,0.0,-8.0][i], step=0.1))
+    df_clim = compute_degree_days(pd.DataFrame({"Mois": MOIS_FR, "Temp. air (°C)": T}))
+    meta = {"source":"Saisie manuelle"}
 
-# --------------- Mode 3 : Import CSV (modèle simple) -----------------
 else:
-    st.markdown(
-        "Téléverse un CSV avec **12 lignes** et la colonne `Temp. air (°C)` (facultatif : `HR (%)`, `Précip. (mm)`, `Pression (kPa)`, `Vent (m/s)`). "
-        "Tu peux aussi inclure une colonne `Mois` (Janvier…Décembre)."
-    )
-    example_csv = "Mois,Temp. air (°C)\n" + "\n".join([f"{m},0.0" for m in MOIS_FR])
-    with st.expander("📄 Modèle CSV (copier-coller)"):
-        st.code(example_csv, language="csv")
-
-    file = st.file_uploader("Importer un CSV (12 lignes, encodage UTF-8)", type=["csv"])
+    st.markdown("CSV : 12 lignes, colonnes min. `Temp. air (°C)`; optionnel `Irrad. horiz. (kWh/m²/mois)` ou `Rayon. horiz. (kWh/m²/j)`.")
+    file = st.file_uploader("Importer un CSV (12 lignes)", type=["csv"])
     if file is not None:
-        try:
-            df_up = pd.read_csv(file)
-            # Normalisation colonnes
-            rename_map = {
-                "Mois": "Mois", "mois":"Mois",
-                "Temp. air (°C)": "Temp. air (°C)",
-                "Température (°C)": "Temp. air (°C)",
-                "Temperature (°C)": "Temp. air (°C)",
-                "Temp": "Temp. air (°C)",
-                "HR (%)": "HR (%)",
-                "Précip. (mm)": "Précip. (mm)", "Precip (mm)":"Précip. (mm)", "Precipitation (mm)":"Précip. (mm)",
-                "Pression (kPa)": "Pression (kPa)", "Pressure (kPa)":"Pression (kPa)",
-                "Vent (m/s)": "Vent (m/s)", "Wind (m/s)":"Vent (m/s)"
-            }
-            df_up = df_up.rename(columns={c: rename_map.get(c, c) for c in df_up.columns})
-            # Remplir Mois si absent
-            if "Mois" not in df_up.columns or df_up["Mois"].isna().any():
-                df_up["Mois"] = MOIS_FR[:len(df_up)]
-            # Vérif longueur
-            if len(df_up) != 12:
-                st.error("Le CSV doit contenir exactement **12 lignes** (une par mois).")
-            elif "Temp. air (°C)" not in df_up.columns:
-                st.error("Colonne **Temp. air (°C)** obligatoire.")
-            else:
-                df_clim = df_up[["Mois","Temp. air (°C)"] + [c for c in ["HR (%)","Précip. (mm)","Pression (kPa)","Vent (m/s)"] if c in df_up.columns]].copy()
-                df_clim = compute_degree_days(df_clim)
-                meta = {"source": "CSV importé"}
-        except Exception as e:
-            st.error(f"Erreur de lecture CSV : {e}")
+        up = pd.read_csv(file)
+        if "Temp. air (°C)" not in up.columns:
+            st.error("Colonne obligatoire manquante : `Temp. air (°C)`")
+        else:
+            df_clim = up.copy()
+            # Si l'utilisateur fournit l'irradiation mensuelle, calcule le quotidien
+            if "Irrad. horiz. (kWh/m²/mois)" in df_clim.columns and "Rayon. horiz. (kWh/m²/j)" not in df_clim.columns:
+                import calendar
+                days = np.array([calendar.monthrange(date.today().year, m)[1] for m in range(1,13)], dtype=float)
+                df_clim["Rayon. horiz. (kWh/m²/j)"] = (np.array(df_clim["Irrad. horiz. (kWh/m²/mois)"], dtype=float) / days).round(2)
+            df_clim = compute_degree_days(df_clim)
+            meta = {"source":"CSV importé"}
 
-# ---------------------- Affichage & sorties -------------------------
+# ---- Affichage + stockage
 if df_clim is not None:
- st.dataframe(df_clim, use_container_width=True, hide_index=True)   
-
-
-
+    st.dataframe(df_clim, use_container_width=True, hide_index=True)
+    st.session_state["climat_mensuel_df"] = df_clim
+    st.session_state["climat_meta"] = meta or {}
+ 
 # =========================================================
 # BLOC 2 — Charge & exploitation (style RETScreen)
 # =========================================================
@@ -376,7 +325,8 @@ R_US_PER_R_SI = 1.0 / R_SI_PER_R_US
 def m2_to_ft2(x): return x * FT2_PER_M2
 def ft2_to_m2(x): return x * M2_PER_FT2
 def lps_to_cfm(x): return x * CFM_PER_LPS
-def cfm_to_lps(x): return x * LPS_PER_LPS
+LPS_PER_CFM = 1.0 / CFM_PER_LPS
+def cfm_to_lps(x): return x * LPS_PER_CFM   # ✅
 
 # ---------------- Caractéristiques de la charge ----------------
 with st.expander("Caractéristiques de la charge (réf./proposé)", expanded=True):
@@ -489,6 +439,41 @@ st.session_state["usage_mensuel_charge"] = usage_df
 # BLOC 3 – Paramètres du capteur solaire à air
 # ==============================
 st.header("3) Paramètres du capteur solaire à air")
+
+# ====== Irradiation utile du MUR (approx rapide, style RETScreen) ======
+with st.expander("Irradiation utile sur le mur (approx rapide)", expanded=True):
+    clim_df = st.session_state.get("climat_mensuel_df")
+    if clim_df is None or "Rayon. horiz. (kWh/m²/j)" not in clim_df.columns:
+        st.info("Ajoute `Rayon. horiz. (kWh/m²/j)` via le catalogue JSON ou un CSV pour activer ce calcul.")
+    else:
+        import calendar
+        days = np.array([calendar.monthrange(date.today().year, m)[1] for m in range(1,13)], dtype=float)
+        G_horiz_daily = np.array(clim_df["Rayon. horiz. (kWh/m²/j)"], dtype=float)
+
+        # Facteur d'orientation/tilt simplifié (vertical ~Sud)
+        # Valeurs prudentes par défaut ; ajuste pour calage RETScreen si besoin
+        f_orient = st.slider("Facteur orientation/tilt (mur vs horizontal)", 0.6, 1.8, 1.20, 0.01,
+                             help=">1 en hiver pour mur vertical sud; ≈1 à mi-saison; <1 en été. Sert au calage global.")
+        # Disponibilité et ombrage saisonnier (bloc capteur)
+        ombrage_saison = float(st.session_state.get("ombrage_saison", 10)) / 100.0
+        atten_vent     = float(st.session_state.get("atten_vent", 0)) / 100.0
+        dispo          = st.slider("Disponibilité système (%)", 70, 100, value=95, step=1) / 100.0
+
+        # Paramètres capteur (déjà saisis au bloc 3)
+        absorptivite      = float(st.session_state.get("absorptivite", 0.94)) if "absorptivite" in st.session_state else 0.94
+        facteur_correctif = float(st.session_state.get("facteur_correctif", 1.00)) if "facteur_correctif" in st.session_state else 1.00
+
+        # Irradiation sur le plan du mur (kWh/m²/mois) — simplification
+        G_wall_month = (G_horiz_daily * f_orient * days).clip(min=0.0)
+
+        # “Utile” après pertes/ombrages (reste un calage simple et transparent)
+        G_wall_utile_month = G_wall_month * (1 - ombrage_saison) * (1 - atten_vent) * dispo * absorptivite * facteur_correctif
+
+        annual_kwh_m2_utile = float(np.sum(G_wall_utile_month))
+        st.metric("Irradiation **utile** (kWh/m²·an)", f"{annual_kwh_m2_utile:,.0f}")
+
+        # Stockage pour les blocs énergie/coûts
+        st.session_state["annual_kwh_m2_utile"] = annual_kwh_m2_utile
 
 # ——— 2.0 Unités (globales à l’app, SI en interne) ———
 st.radio("Unités", ["Métrique (SI)", "Impériales"], horizontal=True, key="unit_mode")
@@ -940,7 +925,9 @@ resume_rows = {
     # Site
     "Adresse": adresse, "Latitude": lat, "Longitude": lon,
     "Azimut_deg": azimuth, "Inclinaison_deg": tilt,
-    "Ombrage_%": shading, "Vent_ref_m_s": wind_ref,
+    "Ombrage_saison_%": int(st.session_state.get("ombrage_saison", 10)),
+    "Attenuation_vent_%": int(st.session_state.get("atten_vent", 0)),
+    "Disponibilite_%": int(dispo*100) if "dispo" in locals() else 95,
     # Capteur & débit
     "Surface_m2": surface_m2, "Surface_ft2": surface_ft2,
     "Qv_CFM": qv_cfm, "Qv_Lps": qv_lps,
@@ -1042,6 +1029,7 @@ try:
     )
 except Exception:
     st.info("Export PDF indisponible (bibliothèque **reportlab** manquante). L’export **Excel** reste complet.")
+
 
 
 
