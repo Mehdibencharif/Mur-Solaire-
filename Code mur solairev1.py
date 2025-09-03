@@ -222,7 +222,7 @@ def compute_degree_days(df, base_heat=18.0, base_cool=10.0, year=None):
     return out
 
 @st.cache_data(show_spinner=False, ttl=86400)
-def fetch_climate_normals_by_coords(lat: float, lon: float):
+def fetch_climate_normals_by_coords(lat: float, lon: float, cache_key: str):
     """Retourne (df, meta) – normales mensuelles 1991–2020 via Meteostat (si dispo)."""
     try:
         from meteostat import Stations, Normals
@@ -238,6 +238,7 @@ def fetch_climate_normals_by_coords(lat: float, lon: float):
     try:
         normals = Normals(stn_id, start=1991, end=2020).fetch()
     except Exception:
+        # Station trouvée mais fetch échoue -> retourne meta pour afficher la légende
         return None, meta
 
     df = pd.DataFrame({
@@ -269,28 +270,45 @@ source_climat = st.radio(
     index=0, horizontal=True
 )
 
+# -- Clé de cache liée à la position & source (évite un tableau figé quand tu changes de site)
+lat_r = round(float(lat), 4)
+lon_r = round(float(lon), 4)
+src_tag = "AUTO" if source_climat.startswith("Auto") else "SADM"
+cache_key = f"{lat_r}_{lon_r}_{src_tag}"
+
 # Récupération
 df_clim, meta = (None, None)
 if source_climat.startswith("Auto"):
-    df_clim, meta = fetch_climate_normals_by_coords(float(lat), float(lon))
+    df_clim, meta = fetch_climate_normals_by_coords(lat_r, lon_r, cache_key)
     if df_clim is None:
         st.warning("Auto indisponible (librairie ou station). Utilisation du préréglage **SADM**.")
         df_clim = DEFAULT_CLIMATE_SADM.copy()
+        meta = None
 else:
     df_clim = DEFAULT_CLIMATE_SADM.copy()
+    meta = None
 
 # Affichage tableau + synthèse
 st.dataframe(df_clim, use_container_width=True, hide_index=True)
 
 moy_air = float(df_clim["Temp. air (°C)"].mean(skipna=True))
-moy_vent = float(df_clim["Vent (m/s)"].mean(skipna=True)) if "Vent (m/s)" in df_clim else float("nan")
 sum_dd18 = float(df_clim["DD18 (°C·j)"].sum(skipna=True))
 sum_dd10 = float(df_clim["DD10 (°C·j)"].sum(skipna=True))
 
-c1, c2, c3 = st.columns(3)
+# 👉 Si tu veux encore afficher le vent moyen, décommente ces 2 lignes :
+# moy_vent = float(df_clim["Vent (m/s)"].mean(skipna=True)) if "Vent (m/s)" in df_clim else float("nan")
+
+# Métriques
+# (version sans vent)
+c1, c2 = st.columns(2)
 c1.metric("T° air moyenne", f"{moy_air:.1f} °C")
-c2.metric("Vent moyen", f"{moy_vent:.1f} m/s")
-c3.metric("DD18 / DD10", f"{sum_dd18:,.0f} / {sum_dd10:,.0f} °C·j")
+c2.metric("DD18 / DD10", f"{sum_dd18:,.0f} / {sum_dd10:,.0f} °C·j")
+
+# (si tu veux la version avec vent, remplace ci-dessus par:)
+# c1, c2, c3 = st.columns(3)
+# c1.metric("T° air moyenne", f"{moy_air:.1f} °C")
+# c2.metric("Vent moyen", f"{moy_vent:.1f} m/s")
+# c3.metric("DD18 / DD10", f"{sum_dd18:,.0f} / {sum_dd10:,.0f} °C·j")
 
 # Légende station (si auto)
 if meta:
@@ -302,10 +320,11 @@ else:
 # Stockage pour réutilisation ultérieure
 st.session_state["climat_mensuel_df"] = df_clim
 st.session_state["climat_meta"] = {
-    "latitude": float(lat),
-    "longitude": float(lon),
+    "latitude": float(lat_r),
+    "longitude": float(lon_r),
     "source": "Auto/Meteostat" if meta else "Préréglage SADM",
 }
+
 # =========================================================
 # BLOC 2 — Charge & exploitation (style RETScreen)
 # =========================================================
@@ -990,6 +1009,7 @@ try:
     )
 except Exception:
     st.info("Export PDF indisponible (bibliothèque **reportlab** manquante). L’export **Excel** reste complet.")
+
 
 
 
