@@ -137,6 +137,32 @@ with st.expander("Comment mesurer/valider l’azimut ?", expanded=False):
 def azimut_cardinal(a: float) -> str:
     labels = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSO","SO","OSO","O","ONO","NO","NNO"]
     return labels[int((a % 360) / 22.5 + 0.5) % 16]
+col1, col2, colX = st.columns([1,1,1])
+
+with col1:
+    azimuth = st.number_input(
+        "Azimut du mur (°)",
+        value=float(st.session_state.get("azimuth", 0.0)),
+        min_value=0.0, max_value=359.99, step=0.01,
+        help="0° = Nord, 90° = Est, 180° = Sud, 270° = Ouest."
+    )
+
+with col2:
+    tilt = st.number_input(
+        "Inclinaison (°)", value=float(st.session_state.get("tilt", 90.0)),
+        min_value=0.0, max_value=90.0, step=1.0,
+        help="0° = horizontal (toit), 90° = vertical (façade)."
+    )
+
+with colX:
+    if st.button("🎲 Azimut aléatoire"):
+        import random
+        azimuth = float(random.uniform(0, 359.99))
+
+st.session_state.update({
+    "azimuth": float(azimuth),
+    "tilt": float(tilt),
+})
 
 st.caption(
     f"🧭 **Azimut MUR** : {azimuth:.2f}° ({azimut_cardinal(azimuth)}) • "
@@ -966,6 +992,7 @@ try:
     )
 except Exception:
     st.info("Export PDF indisponible (bibliothèque **reportlab** manquante). L’export **Excel** reste complet.")
+
 
 
 
