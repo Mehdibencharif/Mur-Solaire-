@@ -167,8 +167,6 @@ st.session_state.update({
 st.caption(
     f"🧭 **Azimut MUR** : {azimuth:.2f}° ({azimut_cardinal(azimuth)}) • "
     f"📐 **Inclinaison** : {tilt:.0f}° • "
-    f"🌫️ **Ombrage** : {shading}% • "
-    f"💨 **Vent** : {wind_ref:.1f} m/s"
 )
 
 # -- Flèche d’azimut sur carte (direction façade)
@@ -992,6 +990,7 @@ try:
     )
 except Exception:
     st.info("Export PDF indisponible (bibliothèque **reportlab** manquante). L’export **Excel** reste complet.")
+
 
 
 
