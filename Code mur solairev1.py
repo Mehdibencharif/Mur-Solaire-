@@ -66,11 +66,20 @@ def compute_degree_days(df, base_heat=18.0, base_cool=10.0, year=None):
     return out
 
 # ==============================
-# BLOC 1 – Localisation, Orientation & Climat
+# BLOC 1 – Localisation, Orientation & Climat (robuste)
 # ==============================
 st.header("1) Localisation & Orientation")
 
-# -- Adresse + liens
+from urllib.parse import quote_plus
+import os, math, json
+import numpy as np
+import pandas as pd
+import pydeck as pdk
+from datetime import date
+
+# ----------------------------
+# Adresse + liens
+# ----------------------------
 adresse = st.text_input(
     "Adresse du site (ou point d’intérêt)",
     value=st.session_state.get("adresse", "Saint-Augustin-de-Desmaures, QC"),
@@ -87,7 +96,9 @@ with c1:
 with c2:
     st.markdown(f"🌍 **Google Earth** : [{('Ouvrir dans Earth' if q else '—')}]({lien_earth})" if q else "🌍 **Google Earth** : —")
 
-# -- Géocodage
+# ----------------------------
+# Géocodage (Nominatim)
+# ----------------------------
 @st.cache_data(show_spinner=False)
 def geocode_addr(addr: str):
     if not addr or not addr.strip():
@@ -124,19 +135,14 @@ st.session_state["lat"], st.session_state["lon"] = float(lat), float(lon)
 if not coords and adresse.strip():
     st.warning("Géocodage indisponible ou infructueux. Coordonnées par défaut affichées — ajuste-les au besoin.")
 
-# -- Saisie directe (comme RETScreen)
-with st.expander("Comment mesurer/valider l’azimut ?", expanded=False):
-    st.write(
-        "- L’**azimut** est mesuré **depuis le Nord**, en degrés **sens horaire**.\n"
-        "- **0°** = Nord, **90°** = Est, **180°** = Sud, **270°** = Ouest.\n"
-        "- Valeur **0–359.99°** (jamais négative)."
-    )
-
+# ----------------------------
+# Azimut / Inclinaison
+# ----------------------------
 def azimut_cardinal(a: float) -> str:
     labels = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSO","SO","OSO","O","ONO","NO","NNO"]
     return labels[int((a % 360) / 22.5 + 0.5) % 16]
-col1, col2, colX = st.columns([1,1,1])
 
+col1, col2, colX = st.columns([1,1,1])
 with col1:
     azimuth = st.number_input(
         "Azimut du mur (°)",
@@ -144,30 +150,27 @@ with col1:
         min_value=0.0, max_value=359.99, step=0.01,
         help="0° = Nord, 90° = Est, 180° = Sud, 270° = Ouest."
     )
-
 with col2:
     tilt = st.number_input(
         "Inclinaison (°)", value=float(st.session_state.get("tilt", 90.0)),
         min_value=0.0, max_value=90.0, step=1.0,
         help="0° = horizontal (toit), 90° = vertical (façade)."
     )
-
 with colX:
     if st.button("🎲 Azimut aléatoire"):
         import random
         azimuth = float(random.uniform(0, 359.99))
 
-st.session_state.update({
-    "azimuth": float(azimuth),
-    "tilt": float(tilt),
-})
+st.session_state.update({"azimuth": float(azimuth), "tilt": float(tilt)})
 
 st.caption(
     f"🧭 **Azimut MUR** : {azimuth:.2f}° ({azimut_cardinal(azimuth)}) • "
-    f"📐 **Inclinaison** : {tilt:.0f}° • "
+    f"📐 **Inclinaison** : {tilt:.0f}°"
 )
 
-# -- Flèche d’azimut sur carte (direction façade)
+# ----------------------------
+# Flèche d’azimut sur carte
+# ----------------------------
 def destination_point(lat_deg, lon_deg, bearing_deg, distance_m=200.0):
     R = 6371000.0
     br = np.deg2rad(bearing_deg)
@@ -201,48 +204,82 @@ else:
 st.pydeck_chart(deck, use_container_width=True)
 
 # =========================================================
-# BLOC CLIMAT – Catalogue interne + Saisie + Import CSV
+# CLIMAT — Catalogue interne + Saisie + Import CSV (robuste)
 # =========================================================
-from io import StringIO
 st.subheader("Climat du site – aperçu (normales 1991–2020)")
 
-# ------------------------- Helpers -------------------------
-MOIS_FR = ["Janvier","Février","Mars","Avril","Mai","Juin",
-           "Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
+MOIS_FR = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
 
 def compute_degree_days(df, base_heat=18.0, base_cool=10.0, year=None):
     import calendar
-    from datetime import date
     year = year or date.today().year
-    days = np.array([calendar.monthrange(year, m)[1] for m in range(1, 13)])
+    days = np.array([calendar.monthrange(year, m)[1] for m in range(1, 13)], dtype=float)
     T = np.asarray(df["Temp. air (°C)"], dtype=float)
     out = df.copy()
     out["DD18 (°C·j)"] = np.round(np.maximum(0.0, base_heat - T) * days, 0)
     out["DD10 (°C·j)"] = np.round(np.maximum(0.0, T - base_cool) * days, 0)
     return out
 
-def df_from_monthly_arrays(t_air, rh=None, precip=None, press=None, wind=None):
+def df_from_monthly_arrays(t_air, rh=None, precip=None, press=None, wind=None, Gm=None):
     data = {"Mois": MOIS_FR, "Temp. air (°C)": t_air}
-    if rh is not None:     data["HR (%)"] = rh
+    if rh     is not None: data["HR (%)"] = rh
     if precip is not None: data["Précip. (mm)"] = precip
-    if press is not None:  data["Pression (kPa)"] = press
-    if wind is not None:   data["Vent (m/s)"] = wind
+    if press  is not None: data["Pression (kPa)"] = press
+    if wind   is not None: data["Vent (m/s)"] = wind
     df = pd.DataFrame(data)
+    # Irradiation mensuelle -> quotidienne si fournie
+    if Gm is not None and len(Gm) == 12 and all(v is not None for v in Gm):
+        import calendar
+        days = np.array([calendar.monthrange(date.today().year, m)[1] for m in range(1,13)], dtype=float)
+        df["Irrad. horiz. (kWh/m²/mois)"] = np.array(Gm, dtype=float)
+        df["Rayon. horiz. (kWh/m²/j)"] = (np.array(Gm, dtype=float) / days).round(2)
     return compute_degree_days(df)
 
-# ------- Charger le catalogue interne (JSON partagé d'équipe) -------
+# ---------- Charger catalogue interne ----------
 @st.cache_data(show_spinner=False)
-def load_clim_catalog(path="data/climat_qc.json"):
-    import json
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+def load_clim_catalog(path_candidates=("data/climat_qc.json","climat_qc.json")):
+    for p in path_candidates:
+        if os.path.exists(p):
+            with open(p, "r", encoding="utf-8") as f:
+                return json.load(f), p
+    return None, None
 
-try:
-    CATALOG = load_clim_catalog()
-except Exception as e:
-    st.error(f"Catalogue climatique introuvable: {e}")
-    CATALOG = {}
+CATALOG, CATALOG_PATH = load_clim_catalog()
 
+# Fallback minimal (au cas où le JSON n’est pas trouvé)
+FALLBACK = {
+    "Quebec (fallback)": {"lat": 46.8139, "lon": -71.2080,
+                          "temp_c": [-12.4,-11.0,-4.6,3.3,10.8,16.3,19.1,17.2,12.5,6.5,0.5,-9.1],
+                          "solar_kwh_m2": [50,73,113,138,158,168,168,152,118,83,53,43]}
+}
+
+if CATALOG is None:
+    st.warning("Catalogue climatique introuvable (`data/climat_qc.json`). Utilisation d’un **fallback** minimal.")
+    CATALOG = FALLBACK
+else:
+    st.caption(f"📚 Catalogue climatique chargé : `{CATALOG_PATH}`")
+
+# ---------- Aide géo : ancre la plus proche ----------
+def haversine_km(lat1, lon1, lat2, lon2):
+    R=6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2-lat1)
+    dlmb = math.radians(lon2-lon1)
+    a = math.sin(dphi/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dlmb/2)**2
+    return 2*R*math.asin(math.sqrt(a))
+
+def nearest_anchor_key(lat, lon, catalog: dict):
+    rows=[]
+    for k,v in catalog.items():
+        if isinstance(v, dict) and "lat" in v and "lon" in v:
+            d = haversine_km(lat,lon, float(v["lat"]), float(v["lon"]))
+            rows.append((k, d))
+    if not rows:
+        return None, None
+    rows.sort(key=lambda x:x[1])
+    return rows[0][0], rows[0][1]
+
+# ---------- Sélection de la source ----------
 mode = st.radio(
     "Source des données climatiques",
     ["Préréglages (catalogue interne)", "Saisie manuelle", "Importer CSV (12 mois)"],
@@ -251,61 +288,81 @@ mode = st.radio(
 
 df_clim, meta = None, None
 
+# -------- Mode 1 : Catalogue interne (avec auto-ancre proche) --------
 if mode == "Préréglages (catalogue interne)":
-    # Pré-sélection (adresse)
     suggestions = list(CATALOG.keys())
+    # pré-sélection par proximité géo si possible
     default_idx = 0
-    addr = (st.session_state.get("adresse","") or "").lower()
-    for i,k in enumerate(suggestions):
-        if k.lower() in addr:
-            default_idx = i; break
+    key_near, dist_km = nearest_anchor_key(float(lat), float(lon), CATALOG)
+    if key_near and key_near in suggestions:
+        default_idx = suggestions.index(key_near)
 
-    choix = st.selectbox("Ville / Profil", suggestions, index=default_idx)
+    choix = st.selectbox("Ville / Profil (catalogue)", suggestions, index=default_idx)
     rec = CATALOG[choix]
-    T = rec["temp_c"]                           # 12 valeurs
-    Gm = rec.get("solar_kwh_m2", [None]*12)     # kWh/m²/mois (optionnel mais recommandé)
+    T  = rec["temp_c"]
+    Gm = rec.get("solar_kwh_m2")  # kWh/m²/mois (optionnel mais recommandé)
 
-    df_clim = pd.DataFrame({"Mois": MOIS_FR, "Temp. air (°C)": T})
-    # Irradiation mensuelle + quotidienne (si dispo dans le JSON)
-    if all(v is not None for v in Gm):
-        import calendar
-        days = np.array([calendar.monthrange(date.today().year, m)[1] for m in range(1,13)], dtype=float)
-        df_clim["Irrad. horiz. (kWh/m²/mois)"] = np.array(Gm, dtype=float)
-        df_clim["Rayon. horiz. (kWh/m²/j)"] = (np.array(Gm, dtype=float) / days).round(2)
+    # Afficher la distance à l’ancre si dispo
+    if key_near == choix and dist_km is not None:
+        st.caption(f"📍 Profil auto-sélectionné par proximité : **{choix}** (≈ {dist_km:.1f} km)")
 
-    df_clim = compute_degree_days(df_clim)
-    meta = {"source":"Catalogue interne", "profil":choix}
+    df_clim = df_from_monthly_arrays(T, Gm=Gm)
+    meta = {"source": "Catalogue interne", "profil": choix}
+    if "lat" in rec and "lon" in rec:
+        meta.update({"profil_lat": rec["lat"], "profil_lon": rec["lon"]})
 
+# -------- Mode 2 : Saisie manuelle --------
 elif mode == "Saisie manuelle":
     cols = st.columns(3); T=[]
+    defaults = [-10.0,-10.0,-3.0,3.0,10.0,16.0,19.0,18.0,12.0,6.0,0.0,-8.0]
     for i,m in enumerate(MOIS_FR):
         with cols[i%3]:
-            T.append(st.number_input(f"{m} (°C)", value=[-10.0,-10.0,-3.0,3.0,10.0,16.0,19.0,18.0,12.0,6.0,0.0,-8.0][i], step=0.1))
-    df_clim = compute_degree_days(pd.DataFrame({"Mois": MOIS_FR, "Temp. air (°C)": T}))
+            T.append(st.number_input(f"{m} (°C)", value=float(defaults[i]), step=0.1, format="%.1f"))
+    df_clim = df_from_monthly_arrays(T)
     meta = {"source":"Saisie manuelle"}
 
+# -------- Mode 3 : Import CSV --------
 else:
-    st.markdown("CSV : 12 lignes, colonnes min. `Temp. air (°C)`; optionnel `Irrad. horiz. (kWh/m²/mois)` ou `Rayon. horiz. (kWh/m²/j)`.")
-    file = st.file_uploader("Importer un CSV (12 lignes)", type=["csv"])
+    st.markdown("CSV : 12 lignes. Colonnes obligatoires **Temp. air (°C)** ; optionnelles **Irrad. horiz. (kWh/m²/mois)** ou **Rayon. horiz. (kWh/m²/j)**.")
+    file = st.file_uploader("Importer un CSV (12 lignes, UTF-8)", type=["csv"])
     if file is not None:
-        up = pd.read_csv(file)
-        if "Temp. air (°C)" not in up.columns:
-            st.error("Colonne obligatoire manquante : `Temp. air (°C)`")
-        else:
-            df_clim = up.copy()
-            # Si l'utilisateur fournit l'irradiation mensuelle, calcule le quotidien
-            if "Irrad. horiz. (kWh/m²/mois)" in df_clim.columns and "Rayon. horiz. (kWh/m²/j)" not in df_clim.columns:
-                import calendar
-                days = np.array([calendar.monthrange(date.today().year, m)[1] for m in range(1,13)], dtype=float)
-                df_clim["Rayon. horiz. (kWh/m²/j)"] = (np.array(df_clim["Irrad. horiz. (kWh/m²/mois)"], dtype=float) / days).round(2)
-            df_clim = compute_degree_days(df_clim)
-            meta = {"source":"CSV importé"}
+        try:
+            up = pd.read_csv(file)
+            # Normalise quelques variantes de noms
+            rename_map = {
+                "Température (°C)": "Temp. air (°C)",
+                "Temperature (°C)": "Temp. air (°C)",
+                "Temp": "Temp. air (°C)",
+                "Irrad. (kWh/m²/mois)": "Irrad. horiz. (kWh/m²/mois)",
+                "Rayonnement (kWh/m²/j)": "Rayon. horiz. (kWh/m²/j)",
+            }
+            up = up.rename(columns={c: rename_map.get(c, c) for c in up.columns})
+            if "Temp. air (°C)" not in up.columns:
+                st.error("Colonne obligatoire manquante : **Temp. air (°C)**")
+            elif len(up) != 12:
+                st.error("Le CSV doit contenir exactement **12 lignes** (Janvier→Décembre).")
+            else:
+                df_clim = up.copy()
 
-# ---- Affichage + stockage
+                # Si mensuel fourni, calcule quotidien si absent
+                if "Irrad. horiz. (kWh/m²/mois)" in df_clim.columns and "Rayon. horiz. (kWh/m²/j)" not in df_clim.columns:
+                    import calendar
+                    days = np.array([calendar.monthrange(date.today().year, m)[1] for m in range(1,13)], dtype=float)
+                    df_clim["Rayon. horiz. (kWh/m²/j)"] = (np.array(df_clim["Irrad. horiz. (kWh/m²/mois)"], dtype=float) / days).round(2)
+
+                df_clim = compute_degree_days(df_clim)
+                meta = {"source":"CSV importé"}
+        except Exception as e:
+            st.error(f"Erreur de lecture CSV : {e}")
+
+# ---- Affichage + stockage d'état
 if df_clim is not None:
     st.dataframe(df_clim, use_container_width=True, hide_index=True)
     st.session_state["climat_mensuel_df"] = df_clim
     st.session_state["climat_meta"] = meta or {}
+else:
+    st.info("Sélectionne un profil du catalogue, saisis 12 valeurs, ou importe un CSV pour afficher le climat.")
+
  
 # =========================================================
 # BLOC 2 — Charge & exploitation (style RETScreen)
@@ -1029,6 +1086,7 @@ try:
     )
 except Exception:
     st.info("Export PDF indisponible (bibliothèque **reportlab** manquante). L’export **Excel** reste complet.")
+
 
 
 
