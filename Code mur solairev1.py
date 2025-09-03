@@ -203,64 +203,19 @@ else:
 st.pydeck_chart(deck, use_container_width=True)
 
 # =========================================================
-# BLOC CLIMAT — Normales 1991–2020 (Auto Meteostat + fallback SADM)
+# BLOC CLIMAT — Auto (Meteostat) avec DIAGNOSTIC + Plans B
 # =========================================================
-import streamlit as st
-import numpy as np
-import pandas as pd
 
-# Valeurs par défaut si lat/lon non définies plus haut
 DEFAULT_LAT, DEFAULT_LON = 46.813900, -71.208000
-
 st.subheader("Climat du site – aperçu (normales 1991–2020)")
 
-# --- Récupération de l'adresse depuis le Bloc 1 (si présent)
+# ---- Adresse & coords depuis l'appli
 adresse = st.session_state.get("adresse", "").strip()
+lat = float(st.session_state.get("lat", DEFAULT_LAT))
+lon = float(st.session_state.get("lon", DEFAULT_LON))
 
-# --- Détection de changement d'adresse + géocodage si la fonction existe
-last_addr = st.session_state.get("_last_addr", "")
-addr_changed = (adresse != "" and adresse != last_addr)
-
-if addr_changed:
-    st.session_state["_last_addr"] = adresse
-    # Si la fonction geocode_addr() existe (définie dans le Bloc 1), on l'utilise
-    if "geocode_addr" in globals():
-        coords = geocode_addr(adresse)
-    else:
-        coords = None
-
-    if coords:
-        st.session_state["lat"], st.session_state["lon"] = float(coords[0]), float(coords[1])
-    else:
-        st.info("🔎 Géocodage indisponible : lat/lon conservés (ajuste-les manuellement au besoin).")
-
-# --- Inputs Latitude/Longitude (avec mémorisation des changements)
-colA, colB = st.columns(2)
-with colA:
-    lat = st.number_input(
-        "Latitude",
-        value=float(st.session_state.get("lat", DEFAULT_LAT)),
-        format="%.6f",
-        key="lat_input"
-    )
-with colB:
-    lon = st.number_input(
-        "Longitude",
-        value=float(st.session_state.get("lon", DEFAULT_LON)),
-        format="%.6f",
-        key="lon_input"
-    )
-
-lat_changed = (st.session_state.get("_last_lat") != lat)
-lon_changed = (st.session_state.get("_last_lon") != lon)
-if lat_changed or lon_changed:
-    st.session_state["_last_lat"] = lat
-    st.session_state["_last_lon"] = lon
-    st.session_state["lat"], st.session_state["lon"] = float(lat), float(lon)
-
-# --- Helpers ---
-MOIS_FR = ["Janvier","Février","Mars","Avril","Mai","Juin",
-           "Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
+# ---- Helpers
+MOIS_FR = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
 
 def compute_degree_days(df, base_heat=18.0, base_cool=10.0, year=None):
     import calendar
@@ -273,38 +228,6 @@ def compute_degree_days(df, base_heat=18.0, base_cool=10.0, year=None):
     out["DD10 (°C·j)"] = np.round(np.maximum(0.0, T - base_cool) * days, 0)
     return out
 
-@st.cache_data(show_spinner=False, ttl=86400)
-def fetch_climate_normals_by_coords(lat: float, lon: float, cache_key: str):
-    """Retourne (df, meta) – normales mensuelles 1991–2020 via Meteostat (si dispo)."""
-    try:
-        from meteostat import Stations, Normals
-    except Exception:
-        return None, None
-
-    stns = Stations().nearby(lat, lon).fetch(3)
-    if stns.empty:
-        return None, None
-    stn_id = stns.index[0]
-    meta = stns.iloc[0].to_dict()
-
-    try:
-        normals = Normals(stn_id, start=1991, end=2020).fetch()
-    except Exception:
-        # Station trouvée mais échec du fetch : renvoyer meta pour info
-        return None, meta
-
-    df = pd.DataFrame({
-        "Mois": MOIS_FR,
-        "Temp. air (°C)": normals.get("tavg", pd.Series([np.nan]*12)).values,
-        "HR (%)":        normals.get("rhum", pd.Series([np.nan]*12)).values,
-        "Précip. (mm)":  normals.get("prcp", pd.Series([np.nan]*12)).values,
-        "Vent (m/s)":    (normals.get("wspd", pd.Series([np.nan]*12)) / 3.6).values,  # km/h -> m/s
-        "Pression (kPa)":(normals.get("pres", pd.Series([np.nan]*12)) / 10.0).values  # hPa -> kPa
-    })
-    df = compute_degree_days(df)
-    return df, meta
-
-# --- Fallback SADM (valeurs type, 12 mois)
 DEFAULT_CLIMATE_SADM = {
     "Mois": MOIS_FR,
     "Temp. air (°C)": [-12.4, -11.0, -4.6, 3.3, 10.8, 16.3, 19.1, 17.2, 12.5, 6.5, 0.5, -9.1],
@@ -315,48 +238,114 @@ DEFAULT_CLIMATE_SADM = {
 }
 DEFAULT_CLIMATE_SADM = compute_degree_days(pd.DataFrame(DEFAULT_CLIMATE_SADM))
 
-# --- Sélecteur de source
+# ---- Source
 source_climat = st.radio(
     "Source des données climatiques",
     ["Auto (station la plus proche)", "Préréglage SADM"],
-    index=0, horizontal=True, key="src_climat_radio"
+    index=0, horizontal=True
 )
-src_changed = (st.session_state.get("_last_src") != source_climat)
-if src_changed:
-    st.session_state["_last_src"] = source_climat
 
-# --- Clé de cache liée à position & source
-lat_r = round(float(st.session_state.get("lat", DEFAULT_LAT)), 4)
-lon_r = round(float(st.session_state.get("lon", DEFAULT_LON)), 4)
-src_tag = "AUTO" if source_climat.startswith("Auto") else "SADM"
-cache_key = f"{lat_r}_{lon_r}_{src_tag}"
+# ---- DIAGNOSTIC FLAGS
+diag = {
+    "lib_meteostat_ok": False,
+    "internet_ok": False,
+    "stations_found": False,
+    "normals_found": False,
+    "error": None,
+    "station_label": None,
+}
 
-# --- Rafraîchissement si un élément a changé
-if addr_changed or lat_changed or lon_changed or src_changed:
-    st.cache_data.clear()
-    st.toast("♻️ Données climat rafraîchies (adresse/coords/source modifiés).")
-    st.session_state["_last_cache_key"] = cache_key
-    st.rerun()
+# ---- Check internet (rapide, non bloquant)
+def check_internet():
+    try:
+        import socket
+        socket.gethostbyname("www.google.com")
+        s = socket.create_connection(("www.google.com", 80), 2)
+        s.close()
+        return True
+    except Exception:
+        return False
 
-# --- Bouton de secours pour forcer le refresh
-if st.button("🔄 Forcer le rafraîchissement des normales climat"):
-    st.cache_data.clear()
-    st.session_state["_last_cache_key"] = cache_key
-    st.rerun()
+# ---- Bloc principal
+df_clim, meta = None, None
 
-# --- Récupération des normales
-df_clim, meta = (None, None)
 if source_climat.startswith("Auto"):
-    df_clim, meta = fetch_climate_normals_by_coords(lat_r, lon_r, cache_key)
-    if df_clim is None:
-        st.warning("Auto indisponible (librairie/station). Utilisation du préréglage **SADM**.")
-        df_clim = DEFAULT_CLIMATE_SADM.copy(); meta = None
-else:
-    df_clim = DEFAULT_CLIMATE_SADM.copy(); meta = None
+    # 1) Dispo librairie
+    try:
+        from meteostat import Stations, Normals
+        diag["lib_meteostat_ok"] = True
+    except Exception as e:
+        diag["error"] = f"Meteostat non installé ou import impossible: {e}"
 
-# --- Affichage tableau + métriques
+    # 2) Internet
+    if diag["lib_meteostat_ok"]:
+        diag["internet_ok"] = check_internet()
+
+    # 3) Stations + normales
+    if diag["lib_meteostat_ok"] and diag["internet_ok"]:
+        try:
+            stns = Stations().nearby(lat, lon).fetch(3)
+            if stns is not None and not stns.empty:
+                diag["stations_found"] = True
+
+                # Choix station (et distance si dispo)
+                options = []
+                for idx, row in stns.iterrows():
+                    name = str(row.get("name", idx))
+                    country = row.get("country", "")
+                    dist_km = row.get("distance", np.nan)
+                    if pd.notna(dist_km):
+                        label = f"{idx} – {name} ({country}) • {dist_km/1000:.1f} km"
+                    else:
+                        label = f"{idx} – {name} ({country})"
+                    options.append((label, idx))
+
+                selected_station_label = st.selectbox(
+                    "Station Meteostat (essaie-en une autre si besoin) :",
+                    [o[0] for o in options],
+                    index=0
+                )
+                chosen_id = dict(options)[selected_station_label]
+                diag["station_label"] = selected_station_label
+
+                normals = Normals(chosen_id, start=1991, end=2020).fetch()
+                if normals is not None and not normals.empty:
+                    diag["normals_found"] = True
+                    df_clim = pd.DataFrame({
+                        "Mois": MOIS_FR,
+                        "Temp. air (°C)": normals.get("tavg", pd.Series([np.nan]*12)).values,
+                        "HR (%)":        normals.get("rhum", pd.Series([np.nan]*12)).values,
+                        "Précip. (mm)":  normals.get("prcp", pd.Series([np.nan]*12)).values,
+                        "Vent (m/s)":    (normals.get("wspd", pd.Series([np.nan]*12)) / 3.6).values,
+                        "Pression (kPa)":(normals.get("pres", pd.Series([np.nan]*12)) / 10.0).values
+                    })
+                    df_clim = compute_degree_days(df_clim)
+                    meta = {"id": chosen_id, "name": stns.loc[chosen_id].get("name", chosen_id),
+                            "country": stns.loc[chosen_id].get("country", ""),
+                            "distance_m": stns.loc[chosen_id].get("distance", np.nan)}
+        except Exception as e:
+            diag["error"] = f"Echec fetch stations/normales: {e}"
+
+# ---- Fallback si Auto KO
+if df_clim is None:
+    if source_climat.startswith("Auto"):
+        # Affiche la raison exacte
+        if not diag["lib_meteostat_ok"]:
+            st.error("❌ Meteostat indisponible. Ajoute à ton requirements.txt : `meteostat`, `numpy`, `pandas`.")
+        elif not diag["internet_ok"]:
+            st.error("🌐 Pas d’accès Internet sortant : l’Auto ne peut pas interroger les stations.")
+        elif not diag["stations_found"]:
+            st.error("📡 Aucune station trouvée pour ces coordonnées.")
+        elif not diag["normals_found"]:
+            st.error("📊 Normales indisponibles pour la station sélectionnée.")
+        if diag["error"]:
+            st.caption(f"🧪 Détail technique : {diag['error']}")
+        st.warning("→ Utilisation du préréglage **SADM** ci-dessous.")
+    df_clim = DEFAULT_CLIMATE_SADM.copy()
+    meta = None
+
+# ---- Affichage tableau + métriques
 st.dataframe(df_clim, use_container_width=True, hide_index=True)
-
 moy_air = float(df_clim["Temp. air (°C)"].mean(skipna=True))
 sum_dd18 = float(df_clim["DD18 (°C·j)"].sum(skipna=True))
 sum_dd10 = float(df_clim["DD10 (°C·j)"].sum(skipna=True))
@@ -365,21 +354,17 @@ c1, c2 = st.columns(2)
 c1.metric("T° air moyenne", f"{moy_air:.1f} °C")
 c2.metric("DD18 / DD10", f"{sum_dd18:,.0f} / {sum_dd10:,.0f} °C·j")
 
-# --- Légende station (si Auto)
-if meta:
-    nom = meta.get("name", "?"); pays = meta.get("country", "")
-    st.caption(f"📡 Station la plus proche : **{nom}** ({pays}) • normales 1991–2020 (Meteostat).")
+# ---- Légende
+if source_climat.startswith("Auto") and meta:
+    dist_txt = f" • {meta['distance_m']/1000:.1f} km" if pd.notna(meta.get("distance_m", np.nan)) else ""
+    st.caption(f"📡 Station : **{meta['name']}** ({meta['country']}) — id **{meta['id']}**{dist_txt}")
 else:
     st.caption("📘 Préréglage **SADM** (valeurs type) — à valider/affiner avec RETScreen.")
 
-# --- Stockage pour réutilisation
-st.session_state["climat_mensuel_df"] = df_clim
-st.session_state["climat_meta"] = {
-    "latitude": float(lat_r),
-    "longitude": float(lon_r),
-    "source": "Auto/Meteostat" if meta else "Préréglage SADM",
-}
-
+# ---- PANNEAU DEBUG (temporaire)
+with st.expander("🛠️ Debug climat (temporaire)"):
+    st.write({"adresse": adresse, "lat": lat, "lon": lon})
+    st.write(diag)
 
 # =========================================================
 # BLOC 2 — Charge & exploitation (style RETScreen)
@@ -1065,6 +1050,7 @@ try:
     )
 except Exception:
     st.info("Export PDF indisponible (bibliothèque **reportlab** manquante). L’export **Excel** reste complet.")
+
 
 
 
